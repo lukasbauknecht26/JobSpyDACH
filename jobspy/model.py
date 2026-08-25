@@ -320,6 +320,7 @@ class ScraperInput(BaseModel):
 
     results_wanted: int = 15
     hours_old: int | None = None
+    google_use_playwright: bool = False
 
 
 class Scraper(ABC):

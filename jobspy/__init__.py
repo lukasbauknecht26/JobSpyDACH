@@ -49,6 +49,7 @@ def scrape_jobs(
     enforce_annual_salary: bool = False,
     verbose: int = 0,
     user_agent: str = None,
+    google_use_playwright: bool = False,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -99,6 +100,7 @@ def scrape_jobs(
         linkedin_company_ids=linkedin_company_ids,
         offset=offset,
         hours_old=hours_old,
+        google_use_playwright=google_use_playwright,
     )
 
     def scrape_site(site: Site) -> Tuple[str, JobResponse]:

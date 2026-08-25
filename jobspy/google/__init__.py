@@ -6,6 +6,8 @@ import json
 from typing import Tuple
 from datetime import datetime, timedelta
 
+from playwright.sync_api import sync_playwright
+
 from jobspy.google.constant import headers_jobs, headers_initial, async_param
 from jobspy.model import (
     Scraper,
@@ -17,7 +19,7 @@ from jobspy.model import (
     JobType,
 )
 from jobspy.util import extract_emails_from_text, extract_job_type, create_session
-from jobspy.google.util import log, find_job_info_initial_page, find_job_info
+from jobspy.google.util import log, find_job_info_initial_page, find_job_info, parse_google_jobs_html
 
 
 class Google(Scraper):
@@ -46,6 +48,10 @@ class Google(Scraper):
         """
         self.scraper_input = scraper_input
         self.scraper_input.results_wanted = min(900, scraper_input.results_wanted)
+
+        if self.scraper_input.google_use_playwright:
+            return self._scrape_playwright(self.scraper_input)
+        #ToDo: Pagination funktioniert vermutlich nicht?
 
         self.session = create_session(
             proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
@@ -82,6 +88,40 @@ class Google(Scraper):
                 + scraper_input.results_wanted
             ]
         )
+
+    def _scrape_playwright(self, scraper_input: ScraperInput) -> JobResponse:
+        google_url = "https://www.google.com/search"
+        google_url = google_url + "?q=" + scraper_input.google_search_term.replace(' ', '+') + "&udm=8"
+
+        with sync_playwright() as p:
+            # 1. Bot-Erkennung umgehen
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                locale="de-DE",
+            )
+            page = context.new_page()
+            page.goto(google_url)
+            # 2. Cookie-Banner ("Alle ablehnen") wegklicken, falls vorhanden
+            reject_btn = page.locator("text=Alle ablehnen")
+            if reject_btn.count() > 0:
+                reject_btn.first.click()
+
+            # 3. Warten bis die Job-Karten geladen sind
+            page.wait_for_selector("div.EimVGf", timeout=10000)
+            html = page.content()
+
+            # 4. JobSpy-HTML-Parser ausführen
+            jobs = parse_google_jobs_html(html)
+            print(f"Gefundene Jobs über Browser: {len(jobs)}")
+            for j in jobs:
+                city = j.location.city if j.location else "N/A"
+                print(f"- {j.title} bei {j.company_name} ({city})")
+            browser.close()
+            return JobResponse(jobs=jobs)
 
     def _get_initial_cursor_and_jobs(self) -> Tuple[str, list[JobPost]]:
         """Gets initial cursor and jobs to paginate through job listings"""
