@@ -5,6 +5,8 @@ import random
 import time
 from typing import Optional, List, Dict, Any
 
+from bs4 import BeautifulSoup
+
 from jobspy.arbeitsagentur.constant import API_URL, BASE_WEB_URL, headers
 from jobspy.arbeitsagentur.util import (
     parse_location,
@@ -19,8 +21,16 @@ from jobspy.model import (
     Site,
     JobPost,
     JobResponse,
+    DescriptionFormat,
 )
-from jobspy.util import create_logger, create_session
+from jobspy.util import (
+    create_logger,
+    create_session,
+    markdown_converter,
+    plain_converter,
+    remove_attributes,
+    extract_emails_from_text,
+)
 
 log = create_logger("Arbeitsagentur")
 
@@ -122,6 +132,50 @@ class Arbeitsagentur(Scraper):
         job_list = job_list[: scraper_input.results_wanted]
         return JobResponse(jobs=job_list)
 
+    def _fetch_job_description(self, job_url: str) -> Optional[str]:
+        """
+        Fetches the job detail page and extracts the full description text
+        from <div class="ba-copytext" id="detail-beschreibung-text-container">.
+        """
+        if not job_url:
+            return None
+
+        try:
+            timeout = getattr(self.scraper_input, "request_timeout", 15) if self.scraper_input else 15
+            response = self.session.get(job_url, timeout=timeout)
+            if response.status_code != 200:
+                log.warning(f"Failed to fetch Arbeitsagentur detail page {job_url}: status {response.status_code}")
+                return None
+
+            soup = BeautifulSoup(response.content, "html.parser")
+            desc_elem = soup.find(id="detail-beschreibung-text-container") or soup.find(
+                "div", class_=lambda c: c and "ba-copytext" in c.split()
+            )
+            if not desc_elem:
+                return None
+
+            desc_elem = remove_attributes(desc_elem)
+            html_desc = desc_elem.prettify(formatter="html")
+
+            desc_format = (
+                getattr(self.scraper_input, "description_format", DescriptionFormat.MARKDOWN)
+                if self.scraper_input
+                else DescriptionFormat.MARKDOWN
+            )
+            if isinstance(desc_format, str):
+                desc_format = DescriptionFormat(desc_format.lower())
+
+            if desc_format == DescriptionFormat.HTML:
+                return html_desc
+            elif desc_format == DescriptionFormat.PLAIN:
+                return plain_converter(html_desc)
+            else:
+                return markdown_converter(html_desc)
+
+        except Exception as e:
+            log.warning(f"Error fetching detail description from {job_url}: {e}")
+            return None
+
     def _process_job_item(self, item: Dict[str, Any]) -> Optional[JobPost]:
         """
         Transforms a REST API v6 job entry into a JobPost object.
@@ -147,7 +201,7 @@ class Arbeitsagentur(Scraper):
         job_types = parse_job_type_v6(item)
         hauptberuf = item.get("hauptberuf")
 
-        # Build description overview
+        # Build fallback description overview
         description_parts = []
         if hauptberuf:
             description_parts.append(f"**Beruf:** {hauptberuf}")
@@ -155,8 +209,13 @@ class Arbeitsagentur(Scraper):
             description_parts.append(f"**Angebotsart:** {item.get('stellenangebotsart')}")
         if item.get("homeofficetyp"):
             description_parts.append(f"**Homeoffice:** {item.get('homeofficetyp')}")
-        description = "\n".join(description_parts) if description_parts else None
+        fallback_description = "\n".join(description_parts) if description_parts else None
 
+        # Fetch full description from detail page
+        full_description = self._fetch_job_description(job_url)
+        description = full_description if full_description else fallback_description
+
+        emails = extract_emails_from_text(description) if description else None
         is_remote = is_job_remote(item)
 
         return JobPost(
@@ -170,6 +229,7 @@ class Arbeitsagentur(Scraper):
             job_type=job_types,
             is_remote=is_remote,
             description=description,
+            emails=emails,
             listing_type=hauptberuf,
             site=self.site,
         )
