@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import logging
-
 from jobspy.model import JobType
+from jobspy.util import create_logger
 
-log = logging.getLogger("JobSpy:ZipRecruiter")
+log = create_logger("ZipRecruiter")
 
 
 def fetch_geo_coordinates(

@@ -16,11 +16,14 @@ from jobspy.model import CompensationInterval, JobType, Site
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+_CURRENT_LOG_LEVEL = logging.INFO
+
+
 def create_logger(name: str):
     logger = logging.getLogger(f"JobSpy:{name}")
-    logger.propagate = False
+    logger.propagate = True
     if not logger.handlers:
-        logger.setLevel(logging.INFO)
+        logger.setLevel(_CURRENT_LOG_LEVEL)
         console_handler = logging.StreamHandler()
         format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
         formatter = logging.Formatter(format)
@@ -132,18 +135,20 @@ def create_session(
     return session
 
 
-def set_logger_level(verbose: int):
+def set_logger_level(verbose: int = 2):
     """
     Adjusts the logger's level. This function allows the logging level to be changed at runtime.
 
     Parameters:
     - verbose: int {0, 1, 2} (default=2, all logs)
     """
+    global _CURRENT_LOG_LEVEL
     if verbose is None:
         return
     level_name = {2: "INFO", 1: "WARNING", 0: "ERROR"}.get(verbose, "INFO")
     level = getattr(logging, level_name.upper(), None)
     if level is not None:
+        _CURRENT_LOG_LEVEL = level
         for logger_name in logging.root.manager.loggerDict:
             if logger_name.startswith("JobSpy:"):
                 logging.getLogger(logger_name).setLevel(level)

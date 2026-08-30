@@ -49,7 +49,7 @@ def scrape_jobs(
     offset: int | None = 0,
     hours_old: int = None,
     enforce_annual_salary: bool = False,
-    verbose: int = 0,
+    verbose: int = 2,
     user_agent: str = None,
     google_use_playwright: bool = False,
     **kwargs,
@@ -69,6 +69,18 @@ def scrape_jobs(
         Site.BDJOBS: BDJobs,  # Add BDJobs to the scraper mapping
         Site.STEPSTONE: StepStone,
         Site.ARBEITSAGENTUR: Arbeitsagentur,
+    }
+    SITE_LOGGER_NAMES = {
+        Site.LINKEDIN: "LinkedIn",
+        Site.INDEED: "Indeed",
+        Site.ZIP_RECRUITER: "ZipRecruiter",
+        Site.GLASSDOOR: "Glassdoor",
+        Site.GOOGLE: "Google",
+        Site.BAYT: "Bayt",
+        Site.NAUKRI: "Naukri",
+        Site.BDJOBS: "BDJobs",
+        Site.STEPSTONE: "StepStone",
+        Site.ARBEITSAGENTUR: "Arbeitsagentur",
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
@@ -111,12 +123,8 @@ def scrape_jobs(
         scraper_class = SCRAPER_MAPPING[site]
         scraper = scraper_class(proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
         scraped_data: JobResponse = scraper.scrape(scraper_input)
-        cap_name = site.value.capitalize()
-        site_name = "ZipRecruiter" if cap_name == "Zip_recruiter" else cap_name
-        site_name = "LinkedIn" if cap_name == "Linkedin" else site_name
-        site_name = "StepStone" if cap_name == "Stepstone" else site_name
-        site_name = "Arbeitsagentur" if cap_name == "Arbeitsagentur" else site_name
-        create_logger(site_name).info(f"finished scraping")
+        site_logger_name = SITE_LOGGER_NAMES.get(site, site.value.capitalize())
+        create_logger(site_logger_name).info(f"finished scraping")
         return site.value, scraped_data
 
     site_to_jobs_dict = {}
