@@ -43,3 +43,13 @@ class NaukriException(Exception):
 class BDJobsException(Exception):
     def __init__(self, message=None):
         super().__init__(message or "An error occurred with BDJobs")
+
+
+class StepStoneException(Exception):
+    def __init__(self, message=None):
+        super().__init__(message or "An error occurred with StepStone")
+
+
+class ArbeitsagenturException(Exception):
+    def __init__(self, message=None):
+        super().__init__(message or "An error occurred with Arbeitsagentur")

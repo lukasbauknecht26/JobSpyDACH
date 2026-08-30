@@ -5,6 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 
+from jobspy.arbeitsagentur import Arbeitsagentur
 from jobspy.bayt import BaytScraper
 from jobspy.bdjobs import BDJobs
 from jobspy.glassdoor import Glassdoor
@@ -12,6 +13,7 @@ from jobspy.google import Google
 from jobspy.indeed import Indeed
 from jobspy.linkedin import LinkedIn
 from jobspy.naukri import Naukri
+from jobspy.stepstone import StepStone
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
 from jobspy.util import (
@@ -65,6 +67,8 @@ def scrape_jobs(
         Site.BAYT: BaytScraper,
         Site.NAUKRI: Naukri,
         Site.BDJOBS: BDJobs,  # Add BDJobs to the scraper mapping
+        Site.STEPSTONE: StepStone,
+        Site.ARBEITSAGENTUR: Arbeitsagentur,
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
@@ -109,7 +113,9 @@ def scrape_jobs(
         scraped_data: JobResponse = scraper.scrape(scraper_input)
         cap_name = site.value.capitalize()
         site_name = "ZipRecruiter" if cap_name == "Zip_recruiter" else cap_name
-        site_name = "LinkedIn" if cap_name == "Linkedin" else cap_name
+        site_name = "LinkedIn" if cap_name == "Linkedin" else site_name
+        site_name = "StepStone" if cap_name == "Stepstone" else site_name
+        site_name = "Arbeitsagentur" if cap_name == "Arbeitsagentur" else site_name
         create_logger(site_name).info(f"finished scraping")
         return site.value, scraped_data
 
