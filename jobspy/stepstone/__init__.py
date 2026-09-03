@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import random
+import re
 import time
 import urllib.parse
 from typing import Optional, List, Dict, Any
+
 from bs4 import BeautifulSoup, Tag
 
-from jobspy.exception import StepStoneException
 from jobspy.model import (
     Scraper,
     ScraperInput,
@@ -27,8 +28,10 @@ from jobspy.stepstone.util import (
 from jobspy.util import (
     create_logger,
     create_session,
+    remove_attributes,
     markdown_converter,
     plain_converter,
+    extract_emails_from_text,
 )
 
 log = create_logger("StepStone")
@@ -39,10 +42,10 @@ class StepStone(Scraper):
     band_delay = 2
 
     def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
+            self,
+            proxies: list[str] | str | None = None,
+            ca_cert: str | None = None,
+            user_agent: str | None = None,
     ):
         super().__init__(Site.STEPSTONE, proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
         self.session = create_session(
@@ -118,13 +121,31 @@ class StepStone(Scraper):
 
                 initial_count = len(job_list)
                 for card in job_cards:
+                    if len(job_list) >= scraper_input.results_wanted:
+                        break
                     try:
+                        # Quick check to skip already seen job IDs before fetching detail page
+                        title_link = (
+                            card.select_one("a[data-at='job-item-title']")
+                            or card.select_one("a[href*='/stellenangebote--']")
+                            or card.select_one("a[href*='/jobs--']")
+                            or card.select_one("h2 a")
+                            or card.select_one("a")
+                        )
+                        if not title_link or not title_link.get("href"):
+                            continue
+                        candidate_url = urllib.parse.urljoin(base_url, title_link["href"])
+                        candidate_id = f"stepstone-{abs(hash(candidate_url))}"
+                        if candidate_id in seen_ids:
+                            continue
+
                         job_post = self._process_card(card, base_url)
                         if job_post and job_post.id not in seen_ids:
                             seen_ids.add(job_post.id)
                             job_list.append(job_post)
                             if len(job_list) >= scraper_input.results_wanted:
                                 break
+                            time.sleep(random.uniform(0.3, 0.7))
                     except Exception as e:
                         log.error(f"Error processing StepStone card: {e}")
                         continue
@@ -151,7 +172,8 @@ class StepStone(Scraper):
         cards = soup.select("article[data-at='job-item'], article[data-genesis-element='CARD']")
         valid_cards = []
         for card in cards:
-            if card.find("a", href=lambda h: h and ("/stellenangebote--" in h or "/jobs--" in h or "-inline.html" in h)):
+            if card.find("a",
+                         href=lambda h: h and ("/stellenangebote--" in h or "/jobs--" in h or "-inline.html" in h)):
                 valid_cards.append(card)
 
         if not valid_cards:
@@ -164,17 +186,98 @@ class StepStone(Scraper):
 
         return valid_cards
 
+    def _fetch_job_description(self, job_url: str) -> Optional[str]:
+        """
+        Fetches the job detail page and extracts the full description.
+        Target container: <div class="job-ad-display-..."> (e.g. job-ad-display-1t26un2 or job-ad-display-e6cidt)
+        or data-at="job-ad-content".
+        """
+        if not job_url:
+            return None
+
+        try:
+            timeout_s = getattr(self.scraper_input, "request_timeout", 30) if self.scraper_input else 30
+            response = self.session.get(job_url, timeout_seconds=timeout_s)
+            if response.status_code != 200:
+                log.warning(f"Failed to fetch StepStone detail page {job_url}: status {response.status_code}")
+                return None
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # 1. Primary: data-at="job-ad-content" / data-atx-component="JobAdContent" (carries class job-ad-display-*)
+            desc_elem = (
+                soup.find("div", attrs={"data-at": "job-ad-content"})
+                or soup.find("div", attrs={"data-atx-component": "JobAdContent"})
+            )
+
+            # 2. Fallback: div with class starting with job-ad-display- that contains section-text
+            if not desc_elem:
+                for div in soup.find_all("div"):
+                    classes = div.get("class", [])
+                    if any(c.startswith("job-ad-display-") for c in classes):
+                        if div.find(attrs={"data-at": re.compile(r"^section-text-")}) or div.find(
+                            class_=re.compile(r"^at-section-text-")
+                        ):
+                            desc_elem = div
+                            break
+
+            # 3. Fallback: div with class starting with job-ad-display- having substantial text
+            if not desc_elem:
+                candidates = []
+                for div in soup.find_all("div"):
+                    classes = div.get("class", [])
+                    if any(c.startswith("job-ad-display-") for c in classes):
+                        text_len = len(div.get_text(strip=True))
+                        if text_len > 200:
+                            candidates.append((text_len, div))
+                if candidates:
+                    candidates.sort(key=lambda x: x[0], reverse=True)
+                    desc_elem = candidates[0][1]
+
+            if not desc_elem:
+                return None
+
+            # Decompose style, script, and svg tags so CSS emotion styles do not contaminate the text
+            for tag in desc_elem.find_all(["style", "script", "svg"]):
+                tag.decompose()
+
+            # Clean attribute noise from descendant elements while preserving essential links/images
+            for tag in desc_elem.find_all(True):
+                tag.attrs = {k: v for k, v in tag.attrs.items() if k in ("href", "src", "alt", "title")}
+
+            desc_elem = remove_attributes(desc_elem)
+            html_desc = desc_elem.prettify(formatter="html")
+
+            desc_format = (
+                getattr(self.scraper_input, "description_format", DescriptionFormat.MARKDOWN)
+                if self.scraper_input
+                else DescriptionFormat.MARKDOWN
+            )
+            if isinstance(desc_format, str):
+                desc_format = DescriptionFormat(desc_format.lower())
+
+            if desc_format == DescriptionFormat.HTML:
+                return html_desc
+            elif desc_format == DescriptionFormat.PLAIN:
+                return plain_converter(html_desc)
+            else:
+                return markdown_converter(html_desc)
+
+        except Exception as e:
+            log.warning(f"Error fetching detail description from {job_url}: {e}")
+            return None
+
     def _process_card(self, card: Tag, base_url: str) -> Optional[JobPost]:
         """
         Parses a single job card element into a JobPost object.
         """
         # Extract title and URL
         title_link = (
-            card.select_one("a[data-at='job-item-title']")
-            or card.select_one("a[href*='/stellenangebote--']")
-            or card.select_one("a[href*='/jobs--']")
-            or card.select_one("h2 a")
-            or card.select_one("a")
+                card.select_one("a[data-at='job-item-title']")
+                or card.select_one("a[href*='/stellenangebote--']")
+                or card.select_one("a[href*='/jobs--']")
+                or card.select_one("h2 a")
+                or card.select_one("a")
         )
 
         if not title_link or not title_link.get("href"):
@@ -189,28 +292,28 @@ class StepStone(Scraper):
 
         # Extract company name
         company_elem = (
-            card.select_one("[data-at='job-item-company-name']")
-            or card.select_one("[data-genesis-element='CARD_SUBTITLE']")
-            or card.select_one("span[class*='company']")
-            or card.select_one("div[class*='company']")
+                card.select_one("[data-at='job-item-company-name']")
+                or card.select_one("[data-genesis-element='CARD_SUBTITLE']")
+                or card.select_one("span[class*='company']")
+                or card.select_one("div[class*='company']")
         )
         company_name = company_elem.get_text(strip=True) if company_elem else "N/A"
 
         # Extract location
         loc_elem = (
-            card.select_one("[data-at='job-item-location']")
-            or card.select_one("[data-genesis-element='CARD_LOCATION']")
-            or card.select_one("span[class*='location']")
-            or card.select_one("div[class*='location']")
+                card.select_one("[data-at='job-item-location']")
+                or card.select_one("[data-genesis-element='CARD_LOCATION']")
+                or card.select_one("span[class*='location']")
+                or card.select_one("div[class*='location']")
         )
         loc_text = loc_elem.get_text(strip=True) if loc_elem else None
         location = parse_location(loc_text, Country.GERMANY)
 
         # Extract date
         time_elem = (
-            card.select_one("time")
-            or card.select_one("[data-at='job-item-time-ago']")
-            or card.select_one("span[class*='date']")
+                card.select_one("time")
+                or card.select_one("[data-at='job-item-time-ago']")
+                or card.select_one("span[class*='date']")
         )
         date_text = time_elem.get_text(strip=True) if time_elem else None
         date_posted = parse_relative_date(date_text)
@@ -220,9 +323,13 @@ class StepStone(Scraper):
         salary_text = salary_elem.get_text(strip=True) if salary_elem else None
         compensation = parse_compensation(salary_text)
 
+        # Fetch detail description
+        description = self._fetch_job_description(job_url)
+        emails = extract_emails_from_text(description) if description else None
+
         # Check remote
         card_text = card.get_text(separator=" ", strip=True)
-        is_remote = is_job_remote(title, loc_text or "", card_text)
+        is_remote = is_job_remote(title, loc_text or "", f"{card_text} {description or ''}")
 
         return JobPost(
             id=job_id,
@@ -233,6 +340,8 @@ class StepStone(Scraper):
             date_posted=date_posted,
             compensation=compensation,
             is_remote=is_remote,
+            description=description,
+            emails=emails,
             site=self.site,
         )
 
