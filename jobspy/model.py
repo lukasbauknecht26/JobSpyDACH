@@ -272,14 +272,6 @@ class JobPost(BaseModel):
     # LinkedIn only atm
     job_function: str | None = None
 
-    # Naukri specific
-    skills: list[str] | None = None  #from tagsAndSkills
-    experience_range: str | None = None  #from experienceText
-    company_rating: float | None = None  #from ambitionBoxData.AggregateRating
-    company_reviews_count: int | None = None  #from ambitionBoxData.ReviewsCount
-    vacancy_count: int | None = None  #from vacancy
-    work_from_home_type: str | None = None  #from clusters.wfhType (e.g., "Hybrid", "Remote")
-
 class JobResponse(BaseModel):
     jobs: list[JobPost] = []
 
@@ -290,9 +282,6 @@ class Site(Enum):
     ZIP_RECRUITER = "zip_recruiter"
     GLASSDOOR = "glassdoor"
     GOOGLE = "google"
-    BAYT = "bayt"
-    NAUKRI = "naukri"
-    BDJOBS = "bdjobs"
     STEPSTONE = "stepstone"
     ARBEITSAGENTUR = "arbeitsagentur"
 

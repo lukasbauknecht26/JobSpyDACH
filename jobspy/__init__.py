@@ -6,13 +6,10 @@ from typing import Tuple
 import pandas as pd
 
 from jobspy.arbeitsagentur import Arbeitsagentur
-from jobspy.bayt import BaytScraper
-from jobspy.bdjobs import BDJobs
 from jobspy.glassdoor import Glassdoor
 from jobspy.google import Google
 from jobspy.indeed import Indeed
 from jobspy.linkedin import LinkedIn
-from jobspy.naukri import Naukri
 from jobspy.stepstone import StepStone
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
@@ -65,9 +62,6 @@ def scrape_jobs(
         Site.ZIP_RECRUITER: ZipRecruiter,
         Site.GLASSDOOR: Glassdoor,
         Site.GOOGLE: Google,
-        Site.BAYT: BaytScraper,
-        Site.NAUKRI: Naukri,
-        Site.BDJOBS: BDJobs,  # Add BDJobs to the scraper mapping
         Site.STEPSTONE: StepStone,
         Site.ARBEITSAGENTUR: Arbeitsagentur,
     }
@@ -77,9 +71,6 @@ def scrape_jobs(
         Site.ZIP_RECRUITER: "ZipRecruiter",
         Site.GLASSDOOR: "Glassdoor",
         Site.GOOGLE: "Google",
-        Site.BAYT: "Bayt",
-        Site.NAUKRI: "Naukri",
-        Site.BDJOBS: "BDJobs",
         Site.STEPSTONE: "StepStone",
         Site.ARBEITSAGENTUR: "Arbeitsagentur",
     }
@@ -203,16 +194,6 @@ def scrape_jobs(
                 else None
             )
 
-            #naukri-specific fields
-            job_data["skills"] = (
-                ", ".join(job_data["skills"]) if job_data["skills"] else None
-            )
-            job_data["experience_range"] = job_data.get("experience_range")
-            job_data["company_rating"] = job_data.get("company_rating")
-            job_data["company_reviews_count"] = job_data.get("company_reviews_count")
-            job_data["vacancy_count"] = job_data.get("vacancy_count")
-            job_data["work_from_home_type"] = job_data.get("work_from_home_type")
-
             job_df = pd.DataFrame([job_data])
             jobs_dfs.append(job_df)
 
@@ -239,7 +220,6 @@ def scrape_jobs(
         return pd.DataFrame()
 
 
-# Add BDJobs to __all__
 __all__ = [
-    "BDJobs",
+    "scrape_jobs",
 ]

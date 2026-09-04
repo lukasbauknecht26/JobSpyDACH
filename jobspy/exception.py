@@ -31,19 +31,6 @@ class GoogleJobsException(Exception):
         super().__init__(message or "An error occurred with Google Jobs")
 
 
-class BaytException(Exception):
-    def __init__(self, message=None):
-        super().__init__(message or "An error occurred with Bayt")
-
-class NaukriException(Exception):
-    def __init__(self,message=None):
-        super().__init__(message or "An error occurred with Naukri")
-
-
-class BDJobsException(Exception):
-    def __init__(self, message=None):
-        super().__init__(message or "An error occurred with BDJobs")
-
 
 class StepStoneException(Exception):
     def __init__(self, message=None):
