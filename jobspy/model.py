@@ -306,6 +306,7 @@ class ScraperInput(BaseModel):
     site_type: list[Site]
     search_term: str | None = None
     google_search_term: str | None = None
+    indeed_search_term: str | None = None
 
     location: str | None = None
     country: Country | None = Country.USA

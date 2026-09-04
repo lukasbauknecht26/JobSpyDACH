@@ -89,9 +89,14 @@ class Indeed(Scraper):
         jobs = []
         new_cursor = None
         filters = self._build_filters()
+        search_val = (
+            self.scraper_input.indeed_search_term
+            if self.scraper_input.indeed_search_term
+            else self.scraper_input.search_term
+        )
         search_term = (
-            self.scraper_input.search_term.replace('"', '\\"')
-            if self.scraper_input.search_term
+            search_val.replace('"', '\\"')
+            if search_val
             else ""
         )
         query = job_search_query.format(

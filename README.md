@@ -67,6 +67,9 @@ Optional
 ├── google_search_term (str)
 |     search term for google jobs. This is the only param for filtering google jobs.
 │
+├── indeed_search_term (str)
+|     search term specifically for indeed jobs. Overrides search_term for indeed if provided.
+│
 ├── location (str)
 │
 ├── distance (int): 
