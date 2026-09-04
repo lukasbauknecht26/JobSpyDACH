@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import json
+import sys
 from typing import Tuple
 from datetime import datetime, timedelta
 
@@ -22,15 +23,23 @@ from jobspy.util import extract_emails_from_text, extract_job_type, create_sessi
 from jobspy.google.util import log, find_job_info_initial_page, find_job_info, parse_google_jobs_html
 
 
+def _get_platform_user_agent() -> str:
+    if sys.platform.startswith("linux"):
+        return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    elif sys.platform == "darwin":
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+
 class Google(Scraper):
     def __init__(
-        self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
+            self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
     ):
         """
         Initializes Google Scraper with the Goodle jobs search url
         """
         site = Site(Site.GOOGLE)
-        super().__init__(site, proxies=proxies, ca_cert=ca_cert)
+        super().__init__(site, proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
 
         self.country = None
         self.session = None
@@ -51,7 +60,7 @@ class Google(Scraper):
 
         if self.scraper_input.google_use_playwright:
             return self._scrape_playwright(self.scraper_input)
-        #ToDo: Pagination funktioniert vermutlich nicht?
+        # ToDo: Pagination funktioniert vermutlich nicht?
 
         self.session = create_session(
             proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
@@ -66,8 +75,8 @@ class Google(Scraper):
         page = 1
 
         while (
-            len(self.seen_urls) < scraper_input.results_wanted + scraper_input.offset
-            and forward_cursor
+                len(self.seen_urls) < scraper_input.results_wanted + scraper_input.offset
+                and forward_cursor
         ):
             log.info(
                 f"search page: {page} / {math.ceil(scraper_input.results_wanted / self.jobs_per_page)}"
@@ -84,37 +93,83 @@ class Google(Scraper):
             page += 1
         return JobResponse(
             jobs=job_list[
-                scraper_input.offset : scraper_input.offset
-                + scraper_input.results_wanted
+                scraper_input.offset: scraper_input.offset
+                                      + scraper_input.results_wanted
             ]
         )
 
     def _scrape_playwright(self, scraper_input: ScraperInput) -> JobResponse:
         google_url = "https://www.google.com/search"
-        google_url = google_url + "?q=" + scraper_input.google_search_term.replace(' ', '+') + "&udm=8"
+        google_url = google_url + "?q=" + scraper_input.google_search_term.replace(' ', '+') + "&udm=8&hl=de"
+
+        chosen_ua = self.user_agent or _get_platform_user_agent()
 
         with sync_playwright() as p:
-            # 1. Bot-Erkennung umgehen
+            # 1. Bot-Erkennung umgehen & Docker-taugliche Flags
             browser = p.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled"]
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                ]
             )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                user_agent=chosen_ua,
                 locale="de-DE",
+                viewport={"width": 1920, "height": 1080},
             )
-            page = context.new_page()
-            page.goto(google_url)
-            # 2. Cookie-Banner ("Alle ablehnen") wegklicken, falls vorhanden
-            reject_btn = page.locator("text=Alle ablehnen")
-            if reject_btn.count() > 0:
-                reject_btn.first.click()
 
-            # 3. Warten bis die Job-Karten geladen sind
-            page.wait_for_selector("div.EimVGf", timeout=10000)
+            # 2. Google Consent-Cookie vorab setzen (verhindert Redirects / Cookie-Modals)
+            context.add_cookies([
+                {
+                    "name": "SOCS",
+                    "value": "CAESHAgBEhJnd3NfMjAyNDA5MDQtMF9SQzIaAmRlIAEaBgiA_L22Bg",
+                    "domain": ".google.com",
+                    "path": "/",
+                }
+            ])
+
+            # 3. Stealth-Maskierung (webdriver, languages, plugins)
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['de-DE', 'de', 'en-US', 'en']
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+            """)
+
+            page = context.new_page()
+            page.goto(google_url, wait_until="domcontentloaded")
+
+            # 4. Cookie-Banner wegklicken, falls dennoch eines angezeigt wird
+            try:
+                reject_btn = page.locator(
+                    'button:has-text("Alle ablehnen"), button:has-text("Reject all"), button:has-text("Alles ablehnen"), [aria-label="Alle ablehnen"]'
+                ).first
+                reject_btn.wait_for(state="visible", timeout=3000)
+                reject_btn.click()
+            except Exception:
+                pass
+
+            # 5. Warten bis die Job-Karten geladen sind (mit Docker-tauglichem Timeout)
+            try:
+                page.wait_for_selector("div.EimVGf", timeout=20000)
+            except Exception as e:
+                print(f"Fehler bei URL: {page.url}")
+                print(f"Seitentitel: {page.title()}")
+                page.screenshot(path="google_debug.png", full_page=True)
+                browser.close()
+                raise e
+
             html = page.content()
 
-            # 4. JobSpy-HTML-Parser ausführen
+            # 6. JobSpy-HTML-Parser ausführen
             jobs = parse_google_jobs_html(html)
             print(f"Gefundene Jobs über Browser: {len(jobs)}")
             for j in jobs:
