@@ -99,13 +99,18 @@ class Indeed(Scraper):
             if search_val
             else ""
         )
+        location_clause = ""
+        if self.scraper_input.location:
+            radius_clause = (
+                f", radius: {self.scraper_input.distance}, radiusUnit: KILOMETERS"
+                if self.scraper_input.distance is not None
+                else ""
+            )
+            location_clause = f'location: {{where: "{self.scraper_input.location}"{radius_clause}}}'
+
         query = job_search_query.format(
             what=(f'what: "{search_term}"' if search_term else ""),
-            location=(
-                f'location: {{where: "{self.scraper_input.location}", radius: {self.scraper_input.distance}, radiusUnit: MILES}}'
-                if self.scraper_input.location
-                else ""
-            ),
+            location=location_clause,
             dateOnIndeed=self.scraper_input.hours_old,
             cursor=f'cursor: "{cursor}"' if cursor else "",
             filters=filters,

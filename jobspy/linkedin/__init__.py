@@ -92,10 +92,15 @@ class LinkedIn(Scraper):
             log.info(
                 f"search page: {request_count} / {math.ceil(scraper_input.results_wanted / 10)}"
             )
+            distance_in_miles = (
+                max(1, int(round(scraper_input.distance / 1.609344)))
+                if scraper_input.distance is not None
+                else None
+            )
             params = {
                 "keywords": scraper_input.search_term,
                 "location": scraper_input.location,
-                "distance": scraper_input.distance,
+                "distance": distance_in_miles,
                 "f_WT": 2 if scraper_input.is_remote else None,
                 "f_JT": (
                     job_type_code(scraper_input.job_type)

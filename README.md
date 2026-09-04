@@ -73,7 +73,7 @@ Optional
 ├── location (str)
 │
 ├── distance (int): 
-|    in miles, default 50
+|    in km, default 50
 │
 ├── job_type (str): 
 |    fulltime, parttime, internship, contract
