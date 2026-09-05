@@ -1,26 +1,31 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+import json
 import math
 import re
-import json
 import sys
 from typing import Tuple
-from datetime import datetime, timedelta
 
 from playwright.sync_api import sync_playwright
 
-from jobspy.google.constant import headers_jobs, headers_initial, async_param
+from jobspy.google.constant import async_param, headers_initial, headers_jobs
+from jobspy.google.util import (
+    find_job_info,
+    find_job_info_initial_page,
+    log,
+    parse_google_jobs_html,
+)
 from jobspy.model import (
+    JobPost,
+    JobResponse,
+    JobType,
+    Location,
     Scraper,
     ScraperInput,
     Site,
-    JobPost,
-    JobResponse,
-    Location,
-    JobType,
 )
-from jobspy.util import extract_emails_from_text, extract_job_type, create_session
-from jobspy.google.util import log, find_job_info_initial_page, find_job_info, parse_google_jobs_html
+from jobspy.util import create_session, extract_emails_from_text, extract_job_type
 
 
 def _get_platform_user_agent() -> str:
@@ -33,7 +38,10 @@ def _get_platform_user_agent() -> str:
 
 class Google(Scraper):
     def __init__(
-            self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
+            self,
+            proxies: list[str] | str | None = None,
+            ca_cert: str | None = None,
+            user_agent: str | None = None,
     ):
         """
         Initializes Google Scraper with the Goodle jobs search url
@@ -100,7 +108,12 @@ class Google(Scraper):
 
     def _scrape_playwright(self, scraper_input: ScraperInput) -> JobResponse:
         google_url = "https://www.google.com/search"
-        google_url = google_url + "?q=" + scraper_input.google_search_term.replace(' ', '+') + "&udm=8&hl=de"
+        google_url = (
+                google_url
+                + "?q="
+                + scraper_input.google_search_term.replace(" ", "+")
+                + "&udm=8&hl=de"
+        )
 
         chosen_ua = self.user_agent or _get_platform_user_agent()
 
@@ -113,7 +126,7 @@ class Google(Scraper):
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                ]
+                ],
             )
             context = browser.new_context(
                 user_agent=chosen_ua,
@@ -122,14 +135,16 @@ class Google(Scraper):
             )
 
             # 2. Google Consent-Cookie vorab setzen (verhindert Redirects / Cookie-Modals)
-            context.add_cookies([
-                {
-                    "name": "SOCS",
-                    "value": "CAESHAgBEhJnd3NfMjAyNDA5MDQtMF9SQzIaAmRlIAEaBgiA_L22Bg",
-                    "domain": ".google.com",
-                    "path": "/",
-                }
-            ])
+            context.add_cookies(
+                [
+                    {
+                        "name": "SOCS",
+                        "value": "CAESHAgBEhJnd3NfMjAyNDA5MDQtMF9SQzIaAmRlIAEaBgiA_L22Bg",
+                        "domain": ".google.com",
+                        "path": "/",
+                    }
+                ]
+            )
 
             # 3. Stealth-Maskierung (webdriver, languages, plugins)
             context.add_init_script("""
@@ -161,8 +176,8 @@ class Google(Scraper):
             try:
                 page.wait_for_selector("div.EimVGf", timeout=20000)
             except Exception as e:
-                print(f"Fehler bei URL: {page.url}")
-                print(f"Seitentitel: {page.title()}")
+                log.error(f"Fehler bei URL: {page.url}")
+                log.error(f"Seitentitel: {page.title()}")
                 page.screenshot(path="google_debug.png", full_page=True)
                 browser.close()
                 raise e
@@ -171,10 +186,7 @@ class Google(Scraper):
 
             # 6. JobSpy-HTML-Parser ausführen
             jobs = parse_google_jobs_html(html)
-            print(f"Gefundene Jobs über Browser: {len(jobs)}")
-            for j in jobs:
-                city = j.location.city if j.location else "N/A"
-                print(f"- {j.title} bei {j.company_name} ({city})")
+            log.info(f"Gefundene Google Jobs über Browser: {len(jobs)}")
             browser.close()
             return JobResponse(jobs=jobs)
 
