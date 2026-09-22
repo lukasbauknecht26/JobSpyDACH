@@ -262,6 +262,10 @@ class ZipRecruiter(Scraper):
                 return data
 
             data["resolved_url"] = getattr(res, "url", None) or job_url
+            if self._is_alertsclk_url(data["resolved_url"]):
+                data["resolved_url"] = self._resolve_alertsclk_url(
+                    data["resolved_url"], res.text
+                ) or data["resolved_url"]
 
             soup = BeautifulSoup(res.text, "html.parser")
 
@@ -318,6 +322,45 @@ class ZipRecruiter(Scraper):
             log.debug(f"Error fetching description from {job_url}: {e}")
 
         return data
+
+    def _resolve_alertsclk_url(self, alertsclk_url: str, html: str) -> str | None:
+        """Resolves the client-side redirect used by Alertsclk job links."""
+        click_id_match = re.search(r'window\.clickId\s*=\s*"([^"\\]+)"', html)
+        if not click_id_match:
+            log.debug(f"Alertsclk response has no click ID: {alertsclk_url}")
+            return None
+
+        parsed_url = urlparse(alertsclk_url)
+        endpoint = f"{parsed_url.scheme or 'https'}://{parsed_url.netloc}/kn-api/get-package-data"
+        try:
+            response = self.session.get(
+                endpoint,
+                params={
+                    "original_url": alertsclk_url,
+                    "partner_referer_host": "",
+                    "click_id": click_id_match.group(1),
+                },
+            )
+            if not response.ok:
+                log.debug(
+                    f"Alertsclk package data returned status {response.status_code}: {alertsclk_url}"
+                )
+                return None
+
+            resolved_url = response.json().get("url")
+            parsed_resolved_url = urlparse(resolved_url) if isinstance(resolved_url, str) else None
+            if parsed_resolved_url and parsed_resolved_url.scheme in {"http", "https"} and parsed_resolved_url.netloc:
+                return resolved_url
+
+            log.debug(f"Alertsclk package data has no valid target URL: {alertsclk_url}")
+        except Exception as e:
+            log.debug(f"Failed to resolve Alertsclk URL {alertsclk_url}: {e}")
+        return None
+
+    @staticmethod
+    def _is_alertsclk_url(job_url: str) -> bool:
+        hostname = (urlparse(job_url).hostname or "").lower()
+        return hostname == "alertsclk.com" or hostname.endswith(".alertsclk.com")
 
     @staticmethod
     def _is_stepstone_url(job_url: str) -> bool:
