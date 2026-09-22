@@ -272,6 +272,36 @@ class StepStone(Scraper):
             log.warning(f"Error fetching detail description from {job_url}: {e}")
             return None, None, False
 
+    def process_job_url(
+        self,
+        job_url: str,
+        *,
+        title: str,
+        company_name: str | None,
+        location_text: str | None,
+        date_posted=None,
+        country: Country = Country.GERMANY,
+    ) -> Optional[JobPost]:
+        """Builds a StepStone job from a resolved detail URL and fallback card data."""
+        description, job_type, is_gone = self._fetch_job_details(job_url)
+        if is_gone:
+            log.info(f"Skipping unavailable StepStone job {job_url}: detail page returned 410")
+            return None
+
+        return JobPost(
+            id=f"stepstone-{abs(hash(job_url))}",
+            title=title,
+            company_name=company_name,
+            location=parse_location(location_text, country),
+            job_url=job_url,
+            date_posted=date_posted,
+            is_remote=is_job_remote(title, location_text or "", description or ""),
+            description=description,
+            job_type=job_type,
+            emails=extract_emails_from_text(description) if description else None,
+            site=self.site,
+        )
+
     def _process_card(self, card: Tag, base_url: str) -> Optional[JobPost]:
         """
         Parses a single job card element into a JobPost object.

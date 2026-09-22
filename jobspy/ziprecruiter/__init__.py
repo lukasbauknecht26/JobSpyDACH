@@ -4,6 +4,7 @@ import json
 import math
 import re
 import time
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -34,6 +35,7 @@ from jobspy.ziprecruiter.util import (
     add_params,
     fetch_geo_coordinates,
 )
+from jobspy.stepstone import StepStone
 
 log = create_logger("ZipRecruiter")
 
@@ -63,6 +65,7 @@ class ZipRecruiter(Scraper):
         self.seen_urls = set()
         self.lat = None
         self.long = None
+        self.stepstone = StepStone(proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
 
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
         """
@@ -182,6 +185,18 @@ class ZipRecruiter(Scraper):
 
         # Fetch detail page
         detail_data = self._get_descr(job_url)
+        resolved_url = detail_data.get("resolved_url") or job_url
+
+        if self._is_stepstone_url(resolved_url):
+            self.stepstone.scraper_input = self.scraper_input
+            return self.stepstone.process_job_url(
+                resolved_url,
+                title=title,
+                company_name=company,
+                location_text=loc_str,
+                date_posted=detail_data.get("date_posted"),
+                country=self.scraper_input.country if self.scraper_input else Country.GERMANY,
+            )
 
         description = detail_data.get("description") or snippet
         if (
@@ -219,7 +234,7 @@ class ZipRecruiter(Scraper):
             location=location,
             job_type=job_type,
             date_posted=date_posted,
-            job_url=job_url,
+            job_url=resolved_url,
             description=description,
             emails=extract_emails_from_text(description) if description else None,
             job_url_direct=detail_data.get("job_url_direct"),
@@ -238,12 +253,15 @@ class ZipRecruiter(Scraper):
             "state": None,
             "country": None,
             "job_url_direct": None,
+            "resolved_url": None,
         }
 
         try:
             res = self.session.get(job_url, allow_redirects=True)
             if not res.ok:
                 return data
+
+            data["resolved_url"] = getattr(res, "url", None) or job_url
 
             soup = BeautifulSoup(res.text, "html.parser")
 
@@ -300,3 +318,10 @@ class ZipRecruiter(Scraper):
             log.debug(f"Error fetching description from {job_url}: {e}")
 
         return data
+
+    @staticmethod
+    def _is_stepstone_url(job_url: str) -> bool:
+        hostname = (urlparse(job_url).hostname or "").lower()
+        return hostname in {"stepstone.de", "stepstone.at"} or hostname.endswith(
+            (".stepstone.de", ".stepstone.at")
+        )

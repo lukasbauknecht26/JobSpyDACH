@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
 
@@ -23,6 +24,17 @@ from jobspy.util import (
     desired_order,
 )
 from jobspy.ziprecruiter import ZipRecruiter
+
+
+def _canonical_job_url(job_url: str | None) -> str | None:
+    if not job_url:
+        return None
+
+    parts = urlsplit(job_url)
+    hostname = (parts.hostname or "").lower()
+    path = parts.path.rstrip("/") or "/"
+    query = "" if hostname.endswith(("stepstone.de", "stepstone.at")) else parts.query
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
 # Update the SCRAPER_MAPPING dictionary in the scrape_jobs function
@@ -213,6 +225,12 @@ def scrape_jobs(
         jobs_df = jobs_df[desired_order]
 
         # Step 4: Sort the DataFrame as required
+        jobs_df["_canonical_job_url"] = jobs_df["job_url"].map(_canonical_job_url)
+        jobs_df["_site_priority"] = (jobs_df["site"] != Site.STEPSTONE.value).astype(int)
+        jobs_df = jobs_df.sort_values(by=["_site_priority"])
+        jobs_df = jobs_df.drop_duplicates(subset=["_canonical_job_url"], keep="first")
+        jobs_df = jobs_df.drop(columns=["_canonical_job_url", "_site_priority"])
+
         return jobs_df.sort_values(
             by=["site", "date_posted"], ascending=[True, False]
         ).reset_index(drop=True)
