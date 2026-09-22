@@ -190,7 +190,7 @@ class ZipRecruiter(Scraper):
         ):
             description = markdown_converter(description)
         elif (
-            self.scraper_input.description_format == DescriptionFormat.PLAIN_TEXT
+            self.scraper_input.description_format == DescriptionFormat.PLAIN
             and description
         ):
             description = plain_converter(description)
