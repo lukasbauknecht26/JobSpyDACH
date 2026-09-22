@@ -55,7 +55,8 @@ class JobType(Enum):
         "dual course",
         "ausbildung",
         "duales studium",
-        "dhbw"
+        "dhbw",
+        "studium"
     )
 
     PER_DIEM = ("perdiem",)
