@@ -76,7 +76,7 @@ Optional
 |    in km, default 50
 │
 ├── job_type (str): 
-|    fulltime, parttime, internship, contract
+|    fulltime, parttime, internship, contract, apprenticeship
 │
 ├── proxies (list): 
 |    in format ['user:pass@host:port', 'localhost']
@@ -223,7 +223,7 @@ JobPost
 │   ├── state
 ├── is_remote
 ├── description
-├── job_type: fulltime, parttime, internship, contract
+├── job_type: fulltime, parttime, internship, contract, apprenticeship
 ├── job_function
 │   ├── interval: yearly, monthly, weekly, daily, hourly
 │   ├── min_amount

@@ -267,6 +267,7 @@ def extract_job_type(description: str):
         JobType.PART_TIME: r"part\s?time",
         JobType.INTERNSHIP: r"internship",
         JobType.CONTRACT: r"contract",
+        JobType.APPRENTICESHIP: r"apprenticeship|dual\s?course|ausbildung|duales\s?studium",
     }
 
     listing_types = []

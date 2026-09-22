@@ -248,6 +248,7 @@ class Google(Scraper):
             JobType.PART_TIME: "Part time",
             JobType.INTERNSHIP: "Internship",
             JobType.CONTRACT: "Contract",
+            JobType.APPRENTICESHIP: "Apprenticeship",
         }
 
         if self.scraper_input.job_type in job_type_mapping:

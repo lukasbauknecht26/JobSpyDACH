@@ -183,11 +183,13 @@ def get_enum_from_job_type(job_type_str: str) -> JobType | None:
     """
     Given a string, returns the corresponding JobType enum member if a match is found.
     """
-    res = None
+    normalized_job_type = re.sub(r"[\s-]+", "", job_type_str).casefold()
     for job_type in JobType:
-        if job_type_str in job_type.value:
-            res = job_type
-    return res
+        if normalized_job_type in {
+            re.sub(r"[\s-]+", "", value).casefold() for value in job_type.value
+        }:
+            return job_type
+    return None
 
 
 def currency_parser(cur_str):
@@ -292,6 +294,7 @@ def extract_job_type(description: str):
         JobType.PART_TIME: r"part\s?time",
         JobType.INTERNSHIP: r"internship",
         JobType.CONTRACT: r"contract",
+        JobType.APPRENTICESHIP: r"apprenticeship|dual\s?course|ausbildung|duales\s?studium",
     }
 
     listing_types = []

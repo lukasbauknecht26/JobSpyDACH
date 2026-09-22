@@ -180,8 +180,9 @@ class Indeed(Scraper):
 
             keys = []
             if self.scraper_input.job_type:
-                key = job_type_key_mapping[self.scraper_input.job_type]
-                keys.append(key)
+                key = job_type_key_mapping.get(self.scraper_input.job_type)
+                if key:
+                    keys.append(key)
 
             if self.scraper_input.is_remote:
                 keys.append("DSQF7")

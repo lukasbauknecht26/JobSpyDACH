@@ -50,6 +50,14 @@ class JobType(Enum):
         "praktik",
     )
 
+    APPRENTICESHIP = (
+        "apprenticeship",
+        "dual course",
+        "ausbildung",
+        "duales studium",
+        "dhbw"
+    )
+
     PER_DIEM = ("perdiem",)
     NIGHTS = ("nights",)
     OTHER = ("other",)

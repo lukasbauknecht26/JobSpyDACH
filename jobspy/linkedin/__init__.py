@@ -102,11 +102,9 @@ class LinkedIn(Scraper):
                 "location": scraper_input.location,
                 "distance": distance_in_miles,
                 "f_WT": 2 if scraper_input.is_remote else None,
-                "f_JT": (
-                    job_type_code(scraper_input.job_type)
-                    if scraper_input.job_type
-                    else None
-                ),
+                "f_JT": job_type_code(scraper_input.job_type)
+                if scraper_input.job_type
+                else None,
                 "pageNum": 0,
                 "start": start,
                 "f_AL": "true" if scraper_input.easy_apply else None,

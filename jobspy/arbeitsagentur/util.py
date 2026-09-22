@@ -72,7 +72,9 @@ def parse_job_type_v6(item: Dict[str, Any]) -> Optional[List[JobType]]:
         types.add(JobType.PART_TIME)
 
     art = (item.get("stellenangebotsart") or "").upper()
-    if "AUSBILDUNG" in art or "PRAKTIKUM" in art:
+    if "AUSBILDUNG" in art or "DUALES STUDIUM" in art:
+        types.add(JobType.APPRENTICESHIP)
+    elif "PRAKTIKUM" in art:
         types.add(JobType.INTERNSHIP)
     elif "BEFRISTET" in (item.get("vertragsdauer") or "").upper():
         types.add(JobType.TEMPORARY)
