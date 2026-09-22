@@ -17,12 +17,14 @@ from jobspy.model import (
     JobResponse,
     Country,
     DescriptionFormat,
+    JobType,
 )
 from jobspy.stepstone.constant import headers, job_card_selectors
 from jobspy.stepstone.util import (
     parse_location,
     parse_relative_date,
     parse_compensation,
+    parse_job_types,
     is_job_remote,
 )
 from jobspy.util import (
@@ -186,23 +188,26 @@ class StepStone(Scraper):
 
         return valid_cards
 
-    def _fetch_job_description(self, job_url: str) -> Optional[str]:
+    def _fetch_job_details(
+        self, job_url: str
+    ) -> tuple[Optional[str], Optional[List[JobType]], bool]:
         """
-        Fetches the job detail page and extracts the full description.
+        Fetches the job detail page and extracts the description and job types.
         Target container: <div class="job-ad-display-..."> (e.g. job-ad-display-1t26un2 or job-ad-display-e6cidt)
         or data-at="job-ad-content".
         """
         if not job_url:
-            return None
+            return None, None, False
 
         try:
             timeout_s = getattr(self.scraper_input, "request_timeout", 30) if self.scraper_input else 30
             response = self.session.get(job_url, timeout_seconds=timeout_s)
             if response.status_code != 200:
                 log.warning(f"Failed to fetch StepStone detail page {job_url}: status {response.status_code}")
-                return None
+                return None, None, response.status_code == 410
 
             soup = BeautifulSoup(response.text, "html.parser")
+            job_types = parse_job_types(soup)
 
             # 1. Primary: data-at="job-ad-content" / data-atx-component="JobAdContent" (carries class job-ad-display-*)
             desc_elem = (
@@ -235,7 +240,7 @@ class StepStone(Scraper):
                     desc_elem = candidates[0][1]
 
             if not desc_elem:
-                return None
+                return None, job_types, False
 
             # Decompose style, script, and svg tags so CSS emotion styles do not contaminate the text
             for tag in desc_elem.find_all(["style", "script", "svg"]):
@@ -257,15 +262,15 @@ class StepStone(Scraper):
                 desc_format = DescriptionFormat(desc_format.lower())
 
             if desc_format == DescriptionFormat.HTML:
-                return html_desc
+                return html_desc, job_types, False
             elif desc_format == DescriptionFormat.PLAIN:
-                return plain_converter(html_desc)
+                return plain_converter(html_desc), job_types, False
             else:
-                return markdown_converter(html_desc)
+                return markdown_converter(html_desc), job_types, False
 
         except Exception as e:
             log.warning(f"Error fetching detail description from {job_url}: {e}")
-            return None
+            return None, None, False
 
     def _process_card(self, card: Tag, base_url: str) -> Optional[JobPost]:
         """
@@ -323,8 +328,11 @@ class StepStone(Scraper):
         salary_text = salary_elem.get_text(strip=True) if salary_elem else None
         compensation = parse_compensation(salary_text)
 
-        # Fetch detail description
-        description = self._fetch_job_description(job_url)
+        # Fetch detail description and metadata from the same page.
+        description, job_type, is_gone = self._fetch_job_details(job_url)
+        if is_gone:
+            log.info(f"Skipping unavailable StepStone job {job_url}: detail page returned 410")
+            return None
         emails = extract_emails_from_text(description) if description else None
 
         # Check remote
@@ -341,6 +349,7 @@ class StepStone(Scraper):
             compensation=compensation,
             is_remote=is_remote,
             description=description,
+            job_type=job_type,
             emails=emails,
             site=self.site,
         )

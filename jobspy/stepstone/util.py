@@ -113,6 +113,45 @@ def parse_compensation(salary_text: Optional[str]) -> Optional[Compensation]:
         return None
 
 
+def parse_job_types(soup: BeautifulSoup) -> Optional[List[JobType]]:
+    """Maps StepStone contract and work-time metadata to job types."""
+    contract_type_elem = soup.select_one('[data-at="metadata-contract-type"]')
+    work_type_elem = soup.select_one('[data-at="metadata-work-type"]')
+
+    contract_type = (
+        contract_type_elem.get_text(" ", strip=True).casefold()
+        if contract_type_elem
+        else ""
+    )
+    work_type = (
+        work_type_elem.get_text(" ", strip=True).casefold()
+        if work_type_elem
+        else ""
+    )
+
+    contract_type_mapping = {
+        "ausbildung, studium": JobType.APPRENTICESHIP,
+        "befristeter vertrag": JobType.TEMPORARY,
+        "studentenjobs, werkstudent": JobType.INTERNSHIP,
+        "praktikum": JobType.INTERNSHIP,
+    }
+    work_type_mapping = {
+        "vollzeit": JobType.FULL_TIME,
+        "teilzeit": JobType.PART_TIME,
+    }
+
+    job_types = []
+    contract_job_type = contract_type_mapping.get(contract_type)
+    if contract_job_type:
+        job_types.append(contract_job_type)
+
+    for work_type_keyword, work_type_job_type in work_type_mapping.items():
+        if work_type_keyword in work_type and work_type_job_type not in job_types:
+            job_types.append(work_type_job_type)
+
+    return job_types or None
+
+
 def is_job_remote(title: str, location_text: str = "", card_text: str = "") -> bool:
     """
     Detects if a job listing offers remote or home office.
