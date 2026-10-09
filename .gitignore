@@ -10,4 +10,5 @@
 *.egg-info/
 .env
 dist
+/.cache/
 /examples/*
