@@ -24,6 +24,7 @@ from jobspy.util import (
     desired_order,
 )
 from jobspy.ziprecruiter import ZipRecruiter
+from jobspy.xing import Xing
 
 
 def _canonical_job_url(job_url: str | None) -> str | None:
@@ -76,6 +77,7 @@ def scrape_jobs(
         Site.GOOGLE: Google,
         Site.STEPSTONE: StepStone,
         Site.ARBEITSAGENTUR: Arbeitsagentur,
+        Site.XING: Xing,
     }
     SITE_LOGGER_NAMES = {
         Site.LINKEDIN: "LinkedIn",
@@ -85,6 +87,7 @@ def scrape_jobs(
         Site.GOOGLE: "Google",
         Site.STEPSTONE: "StepStone",
         Site.ARBEITSAGENTUR: "Arbeitsagentur",
+        Site.XING: "Xing",
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
@@ -179,7 +182,9 @@ def scrape_jobs(
                 job_data["min_amount"] = compensation_obj.get("min_amount")
                 job_data["max_amount"] = compensation_obj.get("max_amount")
                 job_data["currency"] = compensation_obj.get("currency", "USD")
-                job_data["salary_source"] = SalarySource.DIRECT_DATA.value
+                job_data["salary_source"] = compensation_obj.get(
+                    "salary_source", SalarySource.DIRECT_DATA
+                ).value
                 if enforce_annual_salary and (
                     job_data["interval"]
                     and job_data["interval"] != "yearly"
@@ -188,7 +193,7 @@ def scrape_jobs(
                 ):
                     convert_to_annual(job_data)
             else:
-                if country_enum == Country.USA:
+                if country_enum == Country.USA and site != Site.XING.value:
                     (
                         job_data["interval"],
                         job_data["min_amount"],
@@ -202,7 +207,8 @@ def scrape_jobs(
 
             job_data["salary_source"] = (
                 job_data["salary_source"]
-                if "min_amount" in job_data and job_data["min_amount"]
+                if job_data.get("min_amount") is not None
+                or job_data.get("max_amount") is not None
                 else None
             )
 

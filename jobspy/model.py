@@ -233,11 +233,18 @@ class CompensationInterval(Enum):
             return cls[pay_period].value if pay_period in cls.__members__ else None
 
 
+class SalarySource(Enum):
+    DIRECT_DATA = "direct_data"
+    DESCRIPTION = "description"
+    ESTIMATED_DATA = "estimated_data"
+
+
 class Compensation(BaseModel):
     interval: Optional[CompensationInterval] = None
     min_amount: float | None = None
     max_amount: float | None = None
     currency: Optional[str] = "USD"
+    salary_source: SalarySource = SalarySource.DIRECT_DATA
 
 
 class DescriptionFormat(Enum):
@@ -293,11 +300,7 @@ class Site(Enum):
     GOOGLE = "google"
     STEPSTONE = "stepstone"
     ARBEITSAGENTUR = "arbeitsagentur"
-
-
-class SalarySource(Enum):
-    DIRECT_DATA = "direct_data"
-    DESCRIPTION = "description"
+    XING = "xing"
 
 
 class ScraperInput(BaseModel):

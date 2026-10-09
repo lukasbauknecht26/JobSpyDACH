@@ -4,7 +4,7 @@
 
 ## Features
 
-- Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **Google**, **ZipRecruiter**, & other job boards concurrently
+- Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **Google**, **ZipRecruiter**, **StepStone**, **Arbeitsagentur**, and **Xing** concurrently
 - Aggregates the job postings in a dataframe
 - Proxies support to bypass blocking
 
@@ -25,7 +25,7 @@ import csv
 from jobspy import scrape_jobs
 
 jobs = scrape_jobs(
-    site_name=["indeed", "linkedin", "zip_recruiter", "google"], # "glassdoor", "stepstone", "arbeitsagentur"
+    site_name=["indeed", "linkedin", "zip_recruiter", "google"], # "glassdoor", "stepstone", "arbeitsagentur", "xing"
     search_term="software engineer",
     google_search_term="software engineer jobs near San Francisco, CA since yesterday",
     location="San Francisco, CA",
@@ -59,7 +59,7 @@ zip_recruiter Software Developer                 TEKsystems        Phoenix      
 ```plaintext
 Optional
 ├── site_name (list|str): 
-|    linkedin, zip_recruiter, indeed, glassdoor, google, stepstone, arbeitsagentur
+|    linkedin, zip_recruiter, indeed, glassdoor, google, stepstone, arbeitsagentur, xing
 |    (default is all)
 │
 ├── search_term (str)
@@ -114,7 +114,7 @@ Optional
 |    searches for linkedin jobs with specific company ids
 |
 ├── country_indeed (str): 
-|    filters the country on Indeed & Glassdoor (see below for correct spelling)
+|    filters the country on Indeed, Glassdoor & Xing (see below for supported countries)
 |
 ├── enforce_annual_salary (bool): 
 |    converts wages to annual salary
@@ -145,6 +145,43 @@ LinkedIn searches globally & uses only the `location` parameter.
 ### **ZipRecruiter**
 
 ZipRecruiter searches for jobs in **US/Canada** & uses only the `location` parameter.
+
+### **Xing**
+
+Xing uses public search and job detail pages on `www.xing.com` (`www.xing.de`
+redirects there). No account, cookies, or browser setup is required.
+
+```python
+jobs = scrape_jobs(
+    site_name="xing",
+    search_term="Python Entwickler",
+    location="Berlin",
+    country_indeed="germany",  # also "austria" or "switzerland"
+    distance=50,
+    results_wanted=20,
+    description_format="markdown",  # also "html" or "plain"
+)
+```
+
+- `location` supports DACH cities, including Vienna and Zurich. `country_indeed`
+  values `germany`, `austria`, and `switzerland` additionally filter the actual job
+  locations. Without a city, the country name is used as the search location.
+  The default `usa` does not impose a country filter on Xing or label jobs as US jobs.
+- Xing uses semantic search, so results can include related roles. `distance` is
+  passed to Xing in kilometres; fully remote results may lie outside the city radius.
+- `is_remote=True` includes both fully remote and hybrid jobs. `easy_apply=True`
+  selects Xing applications; `False` selects external applications.
+- `job_type` and `hours_old` are checked against available job metadata. Jobs with
+  missing metadata needed to verify an active filter are skipped. `date_posted`
+  uses Xing's published date, or its refresh date when only search data is available.
+- Full descriptions are fetched automatically. `offset` skips raw search positions
+  before local filtering. At most 100 pages of 20 search positions are examined.
+- Salary amounts retain their source currency (including EUR and CHF). Employer
+  salaries use `salary_source="direct_data"`; Xing estimates use
+  `salary_source="estimated_data"`. The latter are estimates, not employer offers.
+- Missing data stays empty. Removed jobs are skipped, and temporary detail failures
+  retain available search data when filters can still be verified. Blocking or
+  changed search markup is logged; the scraper returns the results collected so far.
 
 ### **Indeed / Glassdoor**
 
@@ -229,7 +266,7 @@ JobPost
 │   ├── min_amount
 │   ├── max_amount
 │   ├── currency
-│   └── salary_source: direct_data, description (parsed from posting)
+│   └── salary_source: direct_data, description (parsed from posting), estimated_data (Xing estimate)
 ├── date_posted
 └── emails
 
