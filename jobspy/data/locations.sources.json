@@ -1,0 +1,46 @@
+{
+  "attribution": "Contains modified GeoNames data (https://www.geonames.org/).",
+  "data_sha256": "3d6a9980d7e79a006a5204f8bd7e13928e8f627b1457b3d308e6122fc2c20304",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
+  "place_count": 116315,
+  "region_count": 51,
+  "schema_version": 1,
+  "sources": [
+    {
+      "file": "DE.zip",
+      "sha256": "1964aa8ceb02f054a897dc741954b0a0301c8f5f1870a8e90436b2b9a273f254",
+      "snapshot": "2026-10-09T04:38:22",
+      "url": "https://download.geonames.org/export/dump/DE.zip"
+    },
+    {
+      "file": "DE-alternatenames.zip",
+      "sha256": "9f45d54a1ccdfd894ff8855cad40ee4c0f85416f927763bb28f02bac697fc72a",
+      "snapshot": "2026-10-09T04:47:56",
+      "url": "https://download.geonames.org/export/dump/alternatenames/DE.zip"
+    },
+    {
+      "file": "AT.zip",
+      "sha256": "9d6d4ee1ba1b6ae34b3c5249a9fa579caa52a2dea46afd17bf6d5bf5f6229a14",
+      "snapshot": "2026-10-09T04:36:46",
+      "url": "https://download.geonames.org/export/dump/AT.zip"
+    },
+    {
+      "file": "AT-alternatenames.zip",
+      "sha256": "f8f7b8b17365bee75d06e3e4aee54de9f906886ce8f258d7a39651797c35abca",
+      "snapshot": "2026-10-09T04:47:28",
+      "url": "https://download.geonames.org/export/dump/alternatenames/AT.zip"
+    },
+    {
+      "file": "CH.zip",
+      "sha256": "42c615d144b622ed56a405882b402de0cb2c76c05d094ed32da50fb688e4612d",
+      "snapshot": "2026-10-09T04:37:34",
+      "url": "https://download.geonames.org/export/dump/CH.zip"
+    },
+    {
+      "file": "CH-alternatenames.zip",
+      "sha256": "ab6189e8be688bfe03eb46adcc8611254862c0527311e54647d2d8c663128244",
+      "snapshot": "2026-10-09T04:47:36",
+      "url": "https://download.geonames.org/export/dump/alternatenames/CH.zip"
+    }
+  ]
+}

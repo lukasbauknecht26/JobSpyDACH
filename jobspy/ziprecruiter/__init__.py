@@ -6,7 +6,7 @@ import re
 import time
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from bs4 import BeautifulSoup
 
@@ -182,10 +182,15 @@ class ZipRecruiter(Scraper):
 
         snippet_div = li.find("div", class_="jobList-description")
         snippet = snippet_div.get_text(strip=True) if snippet_div else ""
+        listing_date_elem = li.find("div", class_="jobList-date")
+        listing_date = self._parse_listing_date(
+            listing_date_elem.get_text(" ", strip=True) if listing_date_elem else None
+        )
 
         # Fetch detail page
         detail_data = self._get_descr(job_url)
         resolved_url = detail_data.get("resolved_url") or job_url
+        date_posted = listing_date or detail_data.get("date_posted")
 
         if self._is_stepstone_url(resolved_url):
             self.stepstone.scraper_input = self.scraper_input
@@ -194,7 +199,7 @@ class ZipRecruiter(Scraper):
                 title=title,
                 company_name=company,
                 location_text=loc_str,
-                date_posted=detail_data.get("date_posted"),
+                date_posted=date_posted,
                 country=self.scraper_input.country if self.scraper_input else Country.GERMANY,
             )
 
@@ -210,7 +215,6 @@ class ZipRecruiter(Scraper):
         ):
             description = plain_converter(description)
 
-        date_posted = detail_data.get("date_posted")
         job_type = detail_data.get("job_type")
         if not company and detail_data.get("company"):
             company = detail_data.get("company")
@@ -239,6 +243,98 @@ class ZipRecruiter(Scraper):
             emails=extract_emails_from_text(description) if description else None,
             job_url_direct=detail_data.get("job_url_direct"),
         )
+
+    @staticmethod
+    def _parse_listing_date(date_text: str | None) -> date | None:
+        """Parse German ZipRecruiter listing dates into calendar dates."""
+        if not date_text:
+            return None
+
+        text = date_text.strip().casefold()
+        today = date.today()
+        if text in {"heute", "gerade"}:
+            return today
+        if text == "gestern":
+            return today - timedelta(days=1)
+
+        relative = re.fullmatch(
+            r"vor\s+(\d+)\s+(tag|tage|tagen|stunde|stunden|woche|wochen|monat|monaten)",
+            text,
+        )
+        if relative:
+            amount = int(relative.group(1))
+            unit = relative.group(2)
+            if unit.startswith("tag"):
+                return today - timedelta(days=amount)
+            if unit.startswith("stunde"):
+                return today
+            if unit.startswith("woche"):
+                return today - timedelta(weeks=amount)
+            return today - timedelta(days=amount * 30)
+
+        numeric = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+        if numeric:
+            try:
+                return date(
+                    int(numeric.group(3)),
+                    int(numeric.group(2)),
+                    int(numeric.group(1)),
+                )
+            except ValueError:
+                return None
+
+        month_names = {
+            "jan": 1,
+            "januar": 1,
+            "feb": 2,
+            "februar": 2,
+            "mär": 3,
+            "märz": 3,
+            "maer": 3,
+            "maerz": 3,
+            "apr": 4,
+            "april": 4,
+            "mai": 5,
+            "jun": 6,
+            "juni": 6,
+            "jul": 7,
+            "juli": 7,
+            "aug": 8,
+            "august": 8,
+            "sep": 9,
+            "sept": 9,
+            "september": 9,
+            "okt": 10,
+            "oktober": 10,
+            "nov": 11,
+            "november": 11,
+            "dez": 12,
+            "dezember": 12,
+        }
+        calendar_date = re.fullmatch(
+            r"(\d{1,2})\.\s*([a-zäöü]+)(?:\s+(\d{4}))?", text
+        )
+        if not calendar_date:
+            return None
+
+        day = int(calendar_date.group(1))
+        month = month_names.get(calendar_date.group(2))
+        if not month:
+            return None
+        if calendar_date.group(3):
+            try:
+                return date(int(calendar_date.group(3)), month, day)
+            except ValueError:
+                return None
+
+        for year in range(today.year, today.year - 9, -1):
+            try:
+                parsed_date = date(year, month, day)
+            except ValueError:
+                continue
+            if parsed_date <= today:
+                return parsed_date
+        return None
 
     def _get_descr(self, job_url: str) -> dict:
         """

@@ -1,14 +1,16 @@
 from datetime import datetime, timedelta
 import re
 
-from jobspy.model import JobPost, CompensationInterval, Compensation, Location, JobType
+from jobspy.model import Country, JobPost, CompensationInterval, Compensation, Location, JobType
 from jobspy.util import create_logger
 
 from bs4 import BeautifulSoup
 
 log = create_logger("Google")
 
-def parse_google_jobs_html(html_text: str) -> list[JobPost]:
+def parse_google_jobs_html(
+    html_text: str, location_country: Country | str | None = None
+) -> list[JobPost]:
     """Extracts job records directly from Google's modern search HTML DOM.
 
     Parses job cards (div.EimVGf) and their embedded <template> structures
@@ -84,10 +86,17 @@ def parse_google_jobs_html(html_text: str) -> list[JobPost]:
                 if "," in cleaned_loc:
                     parts = [p.strip() for p in cleaned_loc.split(",")]
                     city = parts[0]
-                    state = parts[1] if len(parts) > 1 else None
-                    country = parts[2] if len(parts) > 2 else None
+                    if len(parts) > 1:
+                        try:
+                            country = Country.from_string(parts[1])
+                        except ValueError:
+                            state = parts[1]
+                            country = parts[2] if len(parts) > 2 else None
                 else:
                     city = cleaned_loc
+
+        if location_raw and not country and location_country:
+            country = location_country
 
         # 4. Job URL / Direct apply URL
         job_url = None

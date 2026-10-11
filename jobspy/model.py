@@ -311,6 +311,7 @@ class ScraperInput(BaseModel):
 
     location: str | None = None
     country: Country | None = Country.USA
+    location_country: Country | None = None
     distance: int | None = None  # in km
     is_remote: bool = False
     job_type: JobType | None = None

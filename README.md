@@ -40,6 +40,28 @@ print(f"Found {len(jobs)} jobs")
 print(jobs.head())
 jobs.to_csv("jobs.csv", quoting=csv.QUOTE_NONNUMERIC, escapechar="\\", index=False) # to_excel
 ```
+### DACH Location Normalization
+By default, all portals share an offline normalization step for the `location`
+column in Germany, Austria and Switzerland. For example, `Constance, BW, DE`
+and `78467 Konstanz, BADEN_WUERTTEMBERG, Germany` become
+`Konstanz, Baden-Württemberg, Germany`.
+
+Cities and regions use German names where available, followed by `Germany`,
+`Austria` or `Switzerland`. An unambiguous city can supply a missing region.
+Postcodes and duplicate country names are removed only after a successful match.
+Postcodes are not validated or used to choose between otherwise ambiguous places.
+Conflicting regions, multiple workplaces, unknown qualifiers, remote locations
+and ambiguous matches keep their original formatting. A DACH country must be
+present in the job's location fields; the search location is not used to guess it.
+
+Use `scrape_jobs(..., normalize_locations=False)` to retain the original output.
+The column layout and row ordering stay the same; use `jobs.sort_values("location")`
+to sort by the normalized location. Existing CSV files are not rewritten.
+
+The bundled [GeoNames](https://www.geonames.org/) extract is used under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), with modifications for
+normalization. No API account or runtime network requests are needed.
+See [data provenance and updates](jobspy/data/README.md) for snapshot details.
 
 ### Output
 
@@ -71,6 +93,9 @@ Optional
 |     search term specifically for indeed jobs. Overrides search_term for indeed if provided.
 │
 ├── location (str)
+│
+├── normalize_locations (bool):
+|    normalize DACH output locations using bundled GeoNames data (default True)
 │
 ├── distance (int): 
 |    in km, default 50
@@ -115,6 +140,9 @@ Optional
 |
 ├── country_indeed (str): 
 |    filters the country on Indeed, Glassdoor & Xing (see below for supported countries)
+|
+├── country (Country | str):
+|    optional country context for Google locations when the result omits its country
 |
 ├── enforce_annual_salary (bool): 
 |    converts wages to annual salary

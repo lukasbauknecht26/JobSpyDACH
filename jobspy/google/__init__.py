@@ -17,6 +17,7 @@ from jobspy.google.util import (
     parse_google_jobs_html,
 )
 from jobspy.model import (
+    Country,
     JobPost,
     JobResponse,
     JobType,
@@ -218,7 +219,9 @@ class Google(Scraper):
                 html = page.content()
 
                 # 6. JobSpy-HTML-Parser ausführen
-                jobs = parse_google_jobs_html(html)
+                jobs = parse_google_jobs_html(
+                    html, location_country=scraper_input.location_country
+                )
                 log.info(f"Gefundene Google Jobs über Browser: {len(jobs)}")
                 return JobResponse(jobs=jobs)
             except (PlaywrightTimeoutError, TimeoutError) as e:
@@ -322,7 +325,19 @@ class Google(Scraper):
         location = city = job_info[2]
         state = country = date_posted = None
         if location and "," in location:
-            city, state, *country = [*map(lambda x: x.strip(), location.split(","))]
+            parts = [part.strip() for part in location.split(",")]
+            city = parts[0]
+            if len(parts) > 1:
+                try:
+                    Country.from_string(parts[1])
+                except ValueError:
+                    state = parts[1]
+                    country = parts[2] if len(parts) > 2 else None
+                else:
+                    country = parts[1]
+
+        if location and not country and self.scraper_input.location_country:
+            country = self.scraper_input.location_country
 
         days_ago_str = job_info[12]
         if type(days_ago_str) == str:
@@ -337,7 +352,7 @@ class Google(Scraper):
             title=title,
             company_name=company_name,
             location=Location(
-                city=city, state=state, country=country[0] if country else None
+                city=city, state=state, country=country
             ),
             job_url=job_url,
             date_posted=date_posted,

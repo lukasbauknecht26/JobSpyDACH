@@ -14,6 +14,7 @@ from jobspy.linkedin import LinkedIn
 from jobspy.stepstone import StepStone
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
+from jobspy.location import normalize_location
 from jobspy.util import (
     set_logger_level,
     extract_salary,
@@ -63,6 +64,8 @@ def scrape_jobs(
     verbose: int = 2,
     user_agent: str = None,
     google_use_playwright: bool = False,
+    normalize_locations: bool = True,
+    country: Country | str | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -106,10 +109,18 @@ def scrape_jobs(
         return site_types
 
     country_enum = Country.from_string(country_indeed)
+    location_country = (
+        country
+        if isinstance(country, Country)
+        else Country.from_string(country)
+        if country is not None
+        else None
+    )
 
     scraper_input = ScraperInput(
         site_type=get_site_type(),
         country=country_enum,
+        location_country=location_country,
         search_term=search_term,
         google_search_term=google_search_term,
         indeed_search_term=indeed_search_term,
@@ -167,9 +178,10 @@ def scrape_jobs(
                 ", ".join(job_data["emails"]) if job_data["emails"] else None
             )
             if job_data["location"]:
-                job_data["location"] = Location(
-                    **job_data["location"]
-                ).display_location()
+                job_location = Location(**job_data["location"])
+                if normalize_locations:
+                    job_location = normalize_location(job_location)
+                job_data["location"] = job_location.display_location()
 
             # Handle compensation
             compensation_obj = job_data.get("compensation")

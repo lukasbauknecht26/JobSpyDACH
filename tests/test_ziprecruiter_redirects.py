@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
@@ -20,13 +21,19 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         return scraper
 
     @staticmethod
-    def _listing():
+    def _listing(date_text=None):
+        listing_date = (
+            f'<div class="jobList-date text-muted u-textNoWrap">{date_text}</div>'
+            if date_text
+            else ""
+        )
         return BeautifulSoup(
-            """
+            f"""
             <li class="job-listing">
               <a class="jobList-title" href="/jobs/123-example">Developer</a>
               <ul class="jobList-introMeta"><li>Example GmbH</li><li>Berlin</li></ul>
               <div class="jobList-description">Zip snippet</div>
+              {listing_date}
             </li>
             """,
             "html.parser",
@@ -47,9 +54,11 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
             scraper_input=None,
             process_job_url=Mock(return_value=expected_job),
         )
-        scraper._get_descr = Mock(return_value={"resolved_url": target_url, "date_posted": None})
+        scraper._get_descr = Mock(
+            return_value={"resolved_url": target_url, "date_posted": date(2020, 1, 1)}
+        )
 
-        job = scraper._process_job(self._listing())
+        job = scraper._process_job(self._listing("2. Okt"))
 
         self.assertIs(job, expected_job)
         self.assertIs(scraper.stepstone.scraper_input, scraper.scraper_input)
@@ -58,7 +67,7 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
             title="Developer",
             company_name="Example GmbH",
             location_text="Berlin",
-            date_posted=None,
+            date_posted=ZipRecruiter._parse_listing_date("2. Okt"),
             country=Country.GERMANY,
         )
 
@@ -84,6 +93,39 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
 
         self.assertEqual(job.job_url, target_url)
         self.assertNotIn("alertsclk.com", job.job_url)
+
+    def test_listing_date_takes_precedence_over_detail_date(self):
+        scraper = self._scraper()
+        scraper.stepstone = SimpleNamespace()
+        scraper._get_descr = Mock(return_value={"date_posted": date(2020, 1, 1)})
+
+        job = scraper._process_job(self._listing("Gestern"))
+
+        self.assertEqual(job.date_posted, date.today() - timedelta(days=1))
+
+    def test_detail_date_is_fallback_when_listing_date_is_missing(self):
+        scraper = self._scraper()
+        detail_date = date(2020, 1, 1)
+        scraper.stepstone = SimpleNamespace()
+        scraper._get_descr = Mock(return_value={"date_posted": detail_date})
+
+        job = scraper._process_job(self._listing())
+
+        self.assertEqual(job.date_posted, detail_date)
+
+    def test_listing_date_parser_handles_german_formats_and_year_rollover(self):
+        today = date.today()
+        expected_october = date(today.year, 10, 2)
+        if expected_october > today:
+            expected_october = date(today.year - 1, 10, 2)
+
+        self.assertEqual(ZipRecruiter._parse_listing_date(" 2. Okt "), expected_october)
+        self.assertEqual(
+            ZipRecruiter._parse_listing_date("vor 3 Tagen"),
+            today - timedelta(days=3),
+        )
+        self.assertEqual(ZipRecruiter._parse_listing_date("Heute"), today)
+        self.assertIsNone(ZipRecruiter._parse_listing_date("unbekannt"))
 
     def test_detail_response_records_final_redirect_url(self):
         scraper = self._scraper()
