@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from bs4 import BeautifulSoup
 
 import jobspy
-from jobspy.model import Country, DescriptionFormat, JobPost, JobResponse, Location, Site
+from jobspy.model import Country, DescriptionFormat, JobPost, JobResponse, JobType, Location, Site
 from jobspy.ziprecruiter import ZipRecruiter
 
 
@@ -21,7 +21,7 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         return scraper
 
     @staticmethod
-    def _listing(date_text=None):
+    def _listing(date_text=None, title="Developer"):
         listing_date = (
             f'<div class="jobList-date text-muted u-textNoWrap">{date_text}</div>'
             if date_text
@@ -30,7 +30,7 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         return BeautifulSoup(
             f"""
             <li class="job-listing">
-              <a class="jobList-title" href="/jobs/123-example">Developer</a>
+              <a class="jobList-title" href="/jobs/123-example">{title}</a>
               <ul class="jobList-introMeta"><li>Example GmbH</li><li>Berlin</li></ul>
               <div class="jobList-description">Zip snippet</div>
               {listing_date}
@@ -93,6 +93,77 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
 
         self.assertEqual(job.job_url, target_url)
         self.assertNotIn("alertsclk.com", job.job_url)
+
+    def test_title_supplements_detail_employment_type(self):
+        cases = (
+            ("Pflichtpraktikum Softwareentwicklung", JobType.INTERNSHIP),
+            ("Praktikantin im Marketing", JobType.INTERNSHIP),
+            ("Werkstudententätigkeit IT", JobType.INTERNSHIP),
+            ("Working Student Finance", JobType.INTERNSHIP),
+            ("Duales Studium Informatik", JobType.APPRENTICESHIP),
+            ("Duales Bachelorstudium BWL", JobType.APPRENTICESHIP),
+            ("Dualer Studiengang Informatik", JobType.APPRENTICESHIP),
+            ("DHBW Wirtschaftsinformatik", JobType.APPRENTICESHIP),
+        )
+        for title, expected_type in cases:
+            with self.subTest(title=title):
+                scraper = self._scraper()
+                scraper.stepstone = SimpleNamespace()
+                scraper._get_descr = Mock(return_value={"job_type": [JobType.FULL_TIME]})
+
+                job = scraper._process_job(self._listing(title=title))
+
+                self.assertEqual(job.job_type, [JobType.FULL_TIME, expected_type])
+
+    def test_title_type_is_added_without_detail_metadata_or_duplicates(self):
+        scraper = self._scraper()
+        scraper.stepstone = SimpleNamespace()
+        scraper._get_descr = Mock(return_value={"job_type": None})
+        job = scraper._process_job(self._listing(title="Werkstudent Data Science"))
+        self.assertEqual(job.job_type, [JobType.INTERNSHIP])
+        self.assertEqual(
+            ZipRecruiter._supplement_job_type_from_title(
+                "Praktikum Data Science", [JobType.INTERNSHIP]
+            ),
+            [JobType.INTERNSHIP],
+        )
+        self.assertEqual(
+            ZipRecruiter._supplement_job_type_from_title(
+                "Praktikum im dualen Studium", [JobType.INTERNSHIP]
+            ),
+            [JobType.INTERNSHIP, JobType.APPRENTICESHIP],
+        )
+
+    def test_unspecific_titles_keep_detail_type(self):
+        for title in ("Bachelor Professional IT", "Interne Kommunikation", "Ausbildung IT"):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    ZipRecruiter._supplement_job_type_from_title(
+                        title, [JobType.FULL_TIME]
+                    ),
+                    [JobType.FULL_TIME],
+                )
+
+    def test_stepstone_redirect_supplements_title_type(self):
+        scraper = self._scraper()
+        target_url = "https://www.stepstone.de/stellenangebote--student--berlin.html"
+        delegated_job = JobPost(
+            title="Werkstudent Softwareentwicklung",
+            company_name="Example GmbH",
+            location=Location(city="Berlin", country=Country.GERMANY),
+            job_url=target_url,
+            site=Site.STEPSTONE,
+            job_type=[JobType.PART_TIME],
+        )
+        scraper.stepstone = SimpleNamespace(process_job_url=Mock(return_value=delegated_job))
+        scraper._get_descr = Mock(return_value={"resolved_url": target_url})
+
+        job = scraper._process_job(
+            self._listing(title="Werkstudent Softwareentwicklung")
+        )
+
+        self.assertIs(job, delegated_job)
+        self.assertEqual(job.job_type, [JobType.PART_TIME, JobType.INTERNSHIP])
 
     def test_listing_date_takes_precedence_over_detail_date(self):
         scraper = self._scraper()

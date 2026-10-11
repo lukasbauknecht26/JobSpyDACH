@@ -24,6 +24,7 @@ from jobspy.model import (
     Compensation,
     Location,
     JobResponse,
+    JobType,
     Country,
     DescriptionFormat,
     Scraper,
@@ -194,7 +195,7 @@ class ZipRecruiter(Scraper):
 
         if self._is_stepstone_url(resolved_url):
             self.stepstone.scraper_input = self.scraper_input
-            return self.stepstone.process_job_url(
+            job = self.stepstone.process_job_url(
                 resolved_url,
                 title=title,
                 company_name=company,
@@ -202,6 +203,9 @@ class ZipRecruiter(Scraper):
                 date_posted=date_posted,
                 country=self.scraper_input.country if self.scraper_input else Country.GERMANY,
             )
+            if job:
+                job.job_type = self._supplement_job_type_from_title(title, job.job_type)
+            return job
 
         description = detail_data.get("description") or snippet
         if (
@@ -215,7 +219,9 @@ class ZipRecruiter(Scraper):
         ):
             description = plain_converter(description)
 
-        job_type = detail_data.get("job_type")
+        job_type = self._supplement_job_type_from_title(
+            title, detail_data.get("job_type")
+        )
         if not company and detail_data.get("company"):
             company = detail_data.get("company")
 
@@ -243,6 +249,34 @@ class ZipRecruiter(Scraper):
             emails=extract_emails_from_text(description) if description else None,
             job_url_direct=detail_data.get("job_url_direct"),
         )
+
+    @staticmethod
+    def _supplement_job_type_from_title(
+        title: str, job_types: list[JobType] | None
+    ) -> list[JobType] | None:
+        title_types = []
+        patterns = (
+            (
+                r"\b(?:dualstudium|duale[srmn]?[\s-]+(?:\w+[\s-]+)?(?:\w*studium|studiengang)|dhbw)\b",
+                JobType.APPRENTICESHIP,
+            ),
+            (
+                r"\b(?:\w*praktik(?:um\w*|a|ant\w*)|werkstudent\w*|working[\s-]+student|internship)\b",
+                JobType.INTERNSHIP,
+            ),
+        )
+        for pattern, job_type in patterns:
+            if re.search(pattern, title, re.I):
+                title_types.append(job_type)
+
+        if not title_types:
+            return job_types
+
+        result = list(job_types or [])
+        for title_type in title_types:
+            if title_type not in result:
+                result.append(title_type)
+        return result
 
     @staticmethod
     def _parse_listing_date(date_text: str | None) -> date | None:
