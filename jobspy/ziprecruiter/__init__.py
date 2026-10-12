@@ -11,6 +11,13 @@ from datetime import date, datetime, timedelta
 from bs4 import BeautifulSoup
 
 from jobspy.ziprecruiter.constant import headers
+from jobspy.ziprecruiter.browser import (
+    BrowserRedirectResolver,
+    _is_terminal_url,
+    is_cloudflare_challenge,
+    is_referral_url,
+)
+from jobspy.ziprecruiter.manual_browser import ManualBrowserResolver, ManualResolvedLink
 from jobspy.util import (
     extract_emails_from_text,
     create_session,
@@ -66,6 +73,7 @@ class ZipRecruiter(Scraper):
         self.seen_urls = set()
         self.lat = None
         self.long = None
+        self._browser_resolver = None
         self.stepstone = StepStone(proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
 
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
@@ -75,6 +83,24 @@ class ZipRecruiter(Scraper):
         :return: JobResponse containing a list of jobs.
         """
         self.scraper_input = scraper_input
+        if scraper_input.ziprecruiter_browser_fallback:
+            if scraper_input.ziprecruiter_browser_mode == "system":
+                self._browser_resolver = ManualBrowserResolver(
+                    timeout=scraper_input.ziprecruiter_browser_timeout
+                )
+            else:
+                self._browser_resolver = BrowserRedirectResolver(
+                    timeout=scraper_input.ziprecruiter_browser_timeout,
+                    proxies=self.proxies,
+                )
+        try:
+            return self._scrape_jobs(scraper_input)
+        finally:
+            if self._browser_resolver is not None:
+                self._browser_resolver.close()
+                self._browser_resolver = None
+
+    def _scrape_jobs(self, scraper_input: ScraperInput) -> JobResponse:
         job_list: list[JobPost] = []
 
         try:
@@ -388,10 +414,47 @@ class ZipRecruiter(Scraper):
 
         try:
             res = self.session.get(job_url, allow_redirects=True)
-            if not res.ok:
+            response_url = getattr(res, "url", None) or job_url
+            if _is_terminal_url(response_url):
+                data["resolved_url"] = response_url
+            challenge = is_cloudflare_challenge(
+                getattr(res, "headers", {}) or {}, getattr(res, "text", "") or ""
+            )
+            resolver = getattr(self, "_browser_resolver", None)
+            if (
+                challenge
+                and is_referral_url(response_url)
+                and getattr(self.scraper_input, "ziprecruiter_browser_fallback", False)
+                and resolver is not None
+            ):
+                browser_response = resolver.resolve(response_url)
+                if isinstance(browser_response, ManualResolvedLink):
+                    data["resolved_url"] = browser_response.url
+                    return data
+                if browser_response is not None:
+                    res = browser_response
+                    response_url = res.url
+                    challenge = is_cloudflare_challenge(res.headers, res.text)
+            if not res.ok or challenge:
+                if res.status_code == 403:
+                    response_headers = {
+                        key.lower(): value
+                        for key, value in (getattr(res, "headers", {}) or {}).items()
+                    }
+                    server = response_headers.get("server") or ""
+                    reason = "Cloudflare challenge" if challenge else "access denied"
+                    log.warning(
+                        "ZipRecruiter detail request returned 403 at host %s "
+                        "(source host %s, reason %s, content-type %s, server %s)",
+                        urlparse(response_url).hostname,
+                        urlparse(job_url).hostname,
+                        reason,
+                        response_headers.get("content-type"),
+                        server,
+                    )
                 return data
 
-            data["resolved_url"] = getattr(res, "url", None) or job_url
+            data["resolved_url"] = response_url
             if self._is_alertsclk_url(data["resolved_url"]):
                 data["resolved_url"] = self._resolve_alertsclk_url(
                     data["resolved_url"], res.text

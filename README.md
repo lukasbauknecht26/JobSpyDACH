@@ -63,6 +63,60 @@ The bundled [GeoNames](https://www.geonames.org/) extract is used under
 normalization. No API account or runtime network requests are needed.
 See [data provenance and updates](jobspy/data/README.md) for snapshot details.
 
+### ZipRecruiter Browser Fallback
+
+For an attended run, enable `ziprecruiter_browser_fallback=True` in `scrape_jobs()`.
+If a known referral link encounters a Cloudflare challenge, the default mode
+`ziprecruiter_browser_mode="system"` opens the link in your normal system browser
+and opens a local URL form once. Complete the redirect, paste the destination URL
+into the form and select **Uebernehmen**. The default for the fallback is `False`;
+unattended runs do not open a browser or start a local form server.
+The fallback only handles `/ekn` links on ZipRecruiter `.com`/`.de` domains and
+Alertsclk links. Direct detail pages do not open a browser, including when their
+detail request is blocked. A destination already reached by HTTP redirects is
+retained even if fetching its content fails.
+
+```python
+jobs = scrape_jobs(
+    site_name=["zip_recruiter"],
+    search_term="Softwareentwickler",
+    location="Berlin",
+    country_indeed="germany",
+    ziprecruiter_browser_fallback=True,
+    ziprecruiter_browser_mode="system",
+    ziprecruiter_browser_timeout=180,
+)
+```
+
+`ziprecruiter_browser_timeout` must be a positive number of seconds and includes
+manual URL entry. **Ueberspringen** keeps the current unresolved link and continues
+with the next one. **Fuer diesen Lauf abbrechen**, a timeout or a browser failure
+disables the fallback for the rest of that run. Closing the form tab is not
+detectable; the request waits until its timeout. The scraper closes its local
+server at the end, but leaves your normal browser and tabs open.
+
+The system mode uses the browser's existing profile and network/proxy settings.
+It does not control the browser, read its cookies or install an extension. The
+form only accepts session-bound requests on `127.0.0.1` at a temporary port.
+
+The previous automated browser remains available with
+`ziprecruiter_browser_mode="playwright"`. It prefers installed Chrome, otherwise
+Playwright Chromium (`python -m playwright install chromium`), and requires a
+graphical desktop. Its dedicated persistent profile is
+`.cache/jobspy/ziprecruiter-browser` relative to the working directory. Keep that
+directory private and do not share it between simultaneous runs. In this mode,
+the first configured scraper proxy is kept for the whole browser session, and
+closing the window disables the fallback. Cloudflare may keep rejecting it.
+
+Both modes resolve job links; fetching StepStone details is a separate request
+and may still be blocked. A manually entered URL does not imply a successful HTTP
+request or provide job HTML.
+
+To diagnose one link interactively, run
+`python -m scripts.diagnose_ziprecruiter_redirect '<ekn-URL>' --browser-fallback`
+from this repository. Its optional `--browser-timeout` also defaults to 180 seconds.
+Use `--browser-mode playwright` to select the previous automated browser.
+
 ### Output
 
 ```

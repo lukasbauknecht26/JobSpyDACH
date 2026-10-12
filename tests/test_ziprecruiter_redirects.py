@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from bs4 import BeautifulSoup
 
@@ -216,6 +216,50 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         scraper.session.get.assert_called_once_with(
             "https://www.alertsclk.com/redirect", allow_redirects=True
         )
+
+    def test_403_reports_final_host_without_logging_ref_link(self):
+        scraper = self._scraper()
+        job_url = "https://www.ziprecruiter.com/ekn/secret-token"
+        scraper.session = SimpleNamespace(
+            get=Mock(
+                return_value=SimpleNamespace(
+                    ok=False,
+                    status_code=403,
+                    url="https://www.stepstone.de/blocked?token=secret-token",
+                    headers={"Content-Type": "text/html", "Server": "edge"},
+                    text="Access denied",
+                )
+            )
+        )
+
+        with patch("jobspy.ziprecruiter.log.warning") as warning:
+            data = scraper._get_descr(job_url)
+
+        self.assertEqual(
+            data["resolved_url"], "https://www.stepstone.de/blocked?token=secret-token"
+        )
+        self.assertEqual(warning.call_count, 1)
+        self.assertIn("www.stepstone.de", str(warning.call_args))
+        self.assertNotIn("secret-token", str(warning.call_args))
+
+    def test_403_cloudflare_challenge_is_identified(self):
+        scraper = self._scraper()
+        scraper.session = SimpleNamespace(
+            get=Mock(
+                return_value=SimpleNamespace(
+                    ok=False,
+                    status_code=403,
+                    url="https://www.ziprecruiter.com/ekn/token",
+                    headers={"Server": "cloudflare"},
+                    text="<title>Just a moment...</title>",
+                )
+            )
+        )
+
+        with patch("jobspy.ziprecruiter.log.warning") as warning:
+            scraper._get_descr("https://www.ziprecruiter.com/ekn/token")
+
+        self.assertIn("Cloudflare challenge", str(warning.call_args))
 
     def test_alertsclk_page_uses_package_data_target_url(self):
         scraper = self._scraper()

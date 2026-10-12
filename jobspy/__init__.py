@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Tuple
+from typing import Literal, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 import pandas as pd
@@ -66,6 +66,9 @@ def scrape_jobs(
     google_use_playwright: bool = False,
     normalize_locations: bool = True,
     country: Country | str | None = None,
+    ziprecruiter_browser_fallback: bool = False,
+    ziprecruiter_browser_timeout: int = 180,
+    ziprecruiter_browser_mode: Literal["system", "playwright"] = "system",
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -136,6 +139,9 @@ def scrape_jobs(
         offset=offset,
         hours_old=hours_old,
         google_use_playwright=google_use_playwright,
+        ziprecruiter_browser_fallback=ziprecruiter_browser_fallback,
+        ziprecruiter_browser_timeout=ziprecruiter_browser_timeout,
+        ziprecruiter_browser_mode=ziprecruiter_browser_mode,
     )
 
     def scrape_site(site: Site) -> Tuple[str, JobResponse]:

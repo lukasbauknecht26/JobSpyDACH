@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Literal, Optional
 from datetime import date
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JobType(Enum):
@@ -326,6 +326,9 @@ class ScraperInput(BaseModel):
     results_wanted: int = 15
     hours_old: int | None = None
     google_use_playwright: bool = False
+    ziprecruiter_browser_fallback: bool = False
+    ziprecruiter_browser_timeout: int = Field(default=180, gt=0)
+    ziprecruiter_browser_mode: Literal["system", "playwright"] = "system"
 
 
 class Scraper(ABC):

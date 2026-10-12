@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZipRecruiter Linkaufl&ouml;sung</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f7f9fa; color: #202b32; font: 15px system-ui, sans-serif; letter-spacing: 0; }
+    main { width: min(600px, 100%); margin: 48px auto; padding: 0 24px; }
+    h1 { margin: 0 0 20px; font-size: 22px; font-weight: 600; }
+    #status { color: #52616a; min-height: 24px; overflow-wrap: anywhere; }
+    #source { display: inline-block; margin: 12px 0 24px; color: #00685c; overflow-wrap: anywhere; }
+    label { display: block; margin-bottom: 8px; font-weight: 600; }
+    input { width: 100%; min-width: 0; padding: 12px; border: 1px solid #89989f; border-radius: 4px; font: inherit; }
+    input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #70bcb3; outline-offset: 2px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+    button { padding: 10px 16px; border: 1px solid #667980; border-radius: 4px; background: white; color: #202b32; font: inherit; cursor: pointer; }
+    button[type="submit"] { background: #00776a; border-color: #00776a; color: white; }
+    #abort { color: #a1303d; border-color: #a1303d; margin-top: 24px; }
+    button:disabled, input:disabled { opacity: .55; cursor: default; }
+    #message { min-height: 24px; margin-top: 16px; color: #a1303d; overflow-wrap: anywhere; }
+    [hidden] { display: none !important; }
+    @media (max-width: 420px) { main { margin-top: 28px; padding: 0 16px; } .actions button { flex: 1 1 auto; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>ZipRecruiter Linkaufl&ouml;sung</h1>
+  <div id="status" role="status" aria-live="polite">Verbinde mit dem Scraper...</div>
+  <a id="source" target="_blank" rel="noopener noreferrer" hidden>Job &ouml;ffnen</a>
+  <form id="form" hidden>
+    <label for="url">Ziel-URL</label>
+    <input id="url" name="url" type="url" required autocomplete="off" placeholder="https://www.stepstone.de/...">
+    <div class="actions">
+      <button type="submit">&Uuml;bernehmen</button>
+      <button id="skip" type="button">&Uuml;berspringen</button>
+    </div>
+    <button id="abort" type="button">F&uuml;r diesen Lauf abbrechen</button>
+  </form>
+  <div id="message" role="alert"></div>
+</main>
+<script>
+  const status = document.getElementById('status');
+  const source = document.getElementById('source');
+  const form = document.getElementById('form');
+  const input = document.getElementById('url');
+  const message = document.getElementById('message');
+  const labels = {
+    waiting: 'Warte auf einen Link...', submitted: 'Ziel-URL wurde \u00fcbernommen.',
+    skipped: 'Link wurde \u00fcbersprungen.', expired: 'Zeit abgelaufen. Fallback beendet.',
+    aborted: 'Manuelle Bearbeitung abgebrochen.', failed: 'Systembrowser konnte nicht ge\u00f6ffnet werden.',
+    closed: 'Scrape-Lauf beendet.'
+  };
+  let currentJob = null;
+  let busy = false;
+  function render(data) {
+    const active = data.phase === 'active' && data.job_id && data.remaining_seconds > 0;
+    if (currentJob !== data.job_id) {
+      currentJob = data.job_id;
+      input.value = '';
+      message.textContent = '';
+    }
+    form.hidden = !active;
+    source.hidden = !active;
+    if (active) {
+      source.href = data.source_url;
+      source.textContent = 'Job \u00f6ffnen: ' + new URL(data.source_url).hostname;
+      status.textContent = 'Ziel-URL ausstehend \u00b7 ' + data.remaining_seconds + ' s';
+    } else {
+      status.textContent = labels[data.phase] || 'Warte auf einen Link...';
+    }
+    for (const control of form.elements) control.disabled = !active || busy;
+  }
+  async function refresh() {
+    try {
+      const response = await fetch('status', { cache: 'no-store' });
+      if (!response.ok) throw new Error();
+      render(await response.json());
+      setTimeout(refresh, 500);
+    } catch (_) {
+      render({ phase: 'closed', job_id: null });
+    }
+  }
+  async function send(action) {
+    if (busy || !currentJob) return;
+    busy = true;
+    const job = currentJob;
+    for (const control of form.elements) control.disabled = true;
+    try {
+      const response = await fetch('action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: job, action, url: input.value })
+      });
+      const data = await response.json();
+      if (!response.ok) message.textContent = data.error;
+      else if (currentJob === job) render({ phase: data.phase, job_id: null });
+    } catch (_) {
+      message.textContent = 'Scraper nicht mehr erreichbar.';
+    } finally {
+      busy = false;
+      if (currentJob === job) for (const control of form.elements) control.disabled = false;
+    }
+  }
+  form.addEventListener('submit', event => { event.preventDefault(); send('accept'); });
+  document.getElementById('skip').addEventListener('click', () => send('skip'));
+  document.getElementById('abort').addEventListener('click', () => send('abort'));
+  refresh();
+</script>
+</body>
+</html>
