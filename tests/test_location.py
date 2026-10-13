@@ -23,6 +23,117 @@ KONSTANZ_EXAMPLES = [
 
 
 class LocationTests(unittest.TestCase):
+    def test_kempten_variants(self):
+        expected = "Kempten, Bayern, Germany"
+        for location in (
+            Location(city="Kempten, Bayern, Germany"),
+            Location(city="Kempten, Germany"),
+            Location(city="Kempten", country=Country.GERMANY),
+            Location(city="Kempten (Allgaeu)", country="DE"),
+        ):
+            with self.subTest(location=location):
+                normalized = normalize_location(location)
+                self.assertEqual(normalized.display_location(), expected)
+                self.assertEqual(normalize_location(normalized), normalized)
+        location = Location(city="Kempten", state="Rheinland-Pfalz", country="DE")
+        self.assertIs(normalize_location(location), location)
+
+    def test_separate_postcodes_after_country_or_state(self):
+        expected = f"Reutlingen, {BW}, Germany"
+        for location in (
+            Location(city=f"Reutlingen, {BW}, Germany"),
+            Location(city="Reutlingen,Baden-Wurttemberg,Germany,72762, Germany"),
+            Location(city="Reutlingen,Baden-Wurttemberg,Germany,72762", country="DE"),
+            Location(city="Reutlingen,Baden-Wurttemberg,72762,Germany"),
+            Location(
+                city="Reutlingen", state="Baden-Wurttemberg,Germany,72762", country="DE"
+            ),
+            Location(city="Reutlingen", state="72762", country="DE"),
+        ):
+            with self.subTest(location=location):
+                before = location.model_copy()
+                normalized = normalize_location(location)
+                self.assertEqual(normalized.display_location(), expected)
+                self.assertEqual(location, before)
+                self.assertEqual(normalize_location(normalized), normalized)
+        self.assertEqual(
+            normalize_location(
+                Location(city="Vienna, Austria,1010")
+            ).display_location(),
+            "Wien, Wien, Austria",
+        )
+        self.assertEqual(
+            normalize_location(
+                Location(city="Zurich, Switzerland,8001")
+            ).display_location(),
+            "Z\u00fcrich, Z\u00fcrich, Switzerland",
+        )
+
+    def test_separate_postcodes_preserve_invalid_or_conflicting_locations(self):
+        for location in (
+            Location(city="Reutlingen,Baden-Wurttemberg,Germany,72762,Austria"),
+            Location(city="Reutlingen,Baden-Wurttemberg,Germany,7276"),
+            Location(city="Reutlingen,Bayern,Germany,72762"),
+            Location(city="Reutlingen,Unknown region,Germany,72762"),
+            Location(city="Vienna,Austria,10100"),
+            Location(city="Reutlingen,72762"),
+            Location(city="72762", country="DE"),
+        ):
+            with self.subTest(location=location):
+                self.assertIs(normalize_location(location), location)
+
+    def test_ulm_export_variants_and_structured_fields(self):
+        expected = f"Ulm, {BW}, Germany"
+        values = [
+            "Ulm Donau, Germany",
+            "Ulm, BW, DE, Germany",
+            f"Ulm, {BW} 89040, Germany, Germany",
+            f"Ulm, {BW}, Germany",
+            "Ulm, Donau, BADEN_WUERTTEMBERG, Germany",
+            "Ulm, Germany",
+        ]
+        values.extend(
+            f"{postcode} Ulm, Donau, BADEN_WUERTTEMBERG, Germany"
+            for postcode in (89073, 89075, 89077, 89081)
+        )
+        locations = [Location(city=value) for value in values]
+        locations.extend(
+            [
+                Location(city="Ulm", state="BW, DE", country=Country.GERMANY),
+                Location(city="Ulm", state=f"{BW} 89040, Germany", country="DE"),
+                Location(
+                    city="89081 Ulm, Donau", state="BADEN_WUERTTEMBERG", country="DE"
+                ),
+                Location(
+                    city="89081 Ulm", state="Donau, BADEN_WUERTTEMBERG", country="DE"
+                ),
+            ]
+        )
+        for location in locations:
+            with self.subTest(location=location):
+                before = location.model_copy()
+                normalized = normalize_location(location)
+                self.assertEqual(normalized.display_location(), expected)
+                self.assertEqual(location, before)
+                self.assertEqual(normalize_location(normalized), normalized)
+
+    def test_ulm_preference_preserves_conflicts_and_other_places(self):
+        for location in (
+            Location(city="Ulm", state="Hessen", country="DE"),
+            Location(city="Ulm, Donau", state="Bayern", country="DE"),
+            Location(city="Ulm", state="Unknown region", country="DE"),
+            Location(city="Ulm", state="Donau, Bayern", country="DE"),
+            Location(city="Ulm / Berlin", country="DE"),
+            Location(city="Ulm", country="AT"),
+            Location(city="Ulm"),
+        ):
+            with self.subTest(location=location):
+                self.assertIs(normalize_location(location), location)
+        location = Location(city="Neu-Ulm", state="Bayern", country="DE")
+        self.assertEqual(
+            normalize_location(location).display_location(), "Neu-Ulm, Bayern, Germany"
+        )
+
     def test_konstanz_strings_and_structured_fields(self):
         locations = [Location(city=value) for value in KONSTANZ_EXAMPLES]
         locations.extend(
@@ -83,9 +194,7 @@ class LocationTests(unittest.TestCase):
         expected = f"\u00dcberlingen, {BW}, Germany"
         examples = [
             Location(city="\u00dcberlingen", state=BW, country="Germany"),
-            Location(
-                city="\u00dcberlingen", state="Baden-Wurttemberg", country="DE"
-            ),
+            Location(city="\u00dcberlingen", state="Baden-Wurttemberg", country="DE"),
             Location(city=f"\u00dcberlingen, {BW}, Germany"),
             Location(city="\u00dcberlingen, Baden-Wurttemberg, Germany"),
         ]
@@ -107,9 +216,7 @@ class LocationTests(unittest.TestCase):
                 state="BADEN_WUERTTEMBERG",
                 country="Germany",
             ),
-            Location(
-                city="Ravensburg, W\u00fcrttemberg, BADEN_WUERTTEMBERG, Germany"
-            ),
+            Location(city="Ravensburg, W\u00fcrttemberg, BADEN_WUERTTEMBERG, Germany"),
         ]
         for location in examples:
             with self.subTest(location=location):

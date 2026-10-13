@@ -12,6 +12,13 @@ names, identifiers, postal codes and links. Preferred German names are used for
 display, with the source's main name as the fallback. Region display names and
 common abbreviations are standardized separately in the generator.
 
+The normalizer explicitly prefers the city Ulm (GeoNames ID 2820256) for
+`Ulm`, `Ulm Donau` and `Ulm, Donau`. The source also contains same-name
+settlements, including two in Baden-Wuerttemberg, so even a state cannot
+disambiguate these names. A conflicting state still preserves the input.
+Likewise, `Kempten` prefers Kempten in Bayern (GeoNames ID 2891621) when
+the input has no state; an explicit conflicting state is preserved.
+
 `locations.sources.json` records source URLs, archive timestamps, SHA-256 checksums
 and output counts. The data format is versioned; each place row contains its
 GeoNames ID, country-qualified admin1 code, display name and aliases. Each region

@@ -25,6 +25,13 @@ _COUNTRY_CODES = {
     alias: code for code, aliases in _COUNTRY_ALIASES.items() for alias in aliases
 }
 _UMLAUTS = str.maketrans({"\u00e4": "ae", "\u00f6": "oe", "\u00fc": "ue"})
+# Explicit city preferences where same-name settlements make the source ambiguous.
+_PREFERRED_PLACES = {
+    ("DE", "kempten"): 2891621,
+    ("DE", "ulm"): 2820256,
+    ("DE", "ulm donau"): 2820256,
+    ("DE", "ulm, donau"): 2820256,
+}
 
 
 def _key(value: str) -> str:
@@ -91,6 +98,13 @@ class _Gazetteer:
         return next(iter(matches)) if len(matches) == 1 else None
 
     def place(self, value: str, country: str, region: str | None):
+        preferred = _PREFERRED_PLACES.get((country, _key(value)))
+        if preferred is not None:
+            place = self.places.get(preferred)
+            if place is None or (region and place[1] != region):
+                return None
+            name, place_region = place
+            return name, self.regions[place_region], country
         matches = self.exact.get((country, _key(value)), set())
         if matches:
             canonical = {
@@ -159,13 +173,23 @@ def _normalize_parts(city: str | None, state: str | None, country: str | None):
         countries.add(code)
     city_parts = [part.strip() for part in city.split(",") if part.strip()]
     state_parts = [part.strip() for part in (state or "").split(",") if part.strip()]
+    postcodes = []
     for parts in (city_parts, state_parts):
-        while parts and (code := _country_code(parts[-1])):
-            countries.add(code)
-            parts.pop()
+        while parts:
+            if code := _country_code(parts[-1]):
+                countries.add(code)
+                parts.pop()
+            elif re.fullmatch(r"\d{4,5}", parts[-1]) and (
+                len(parts) > 1 or parts is state_parts
+            ):
+                postcodes.append(parts.pop())
+            else:
+                break
     if len(countries) != 1 or not city_parts:
         return None
     code = next(iter(countries))
+    if any(len(postcode) != (5 if code == "DE" else 4) for postcode in postcodes):
+        return None
     gazetteer = _gazetteer()
     if gazetteer is None:
         return None
@@ -189,11 +213,11 @@ def _normalize_parts(city: str | None, state: str | None, country: str | None):
 
     baden_wuerttemberg = gazetteer.region("Baden-W\u00fcrttemberg", "DE")
     confirmed_baden_wuerttemberg = code == "DE" and regions == {baden_wuerttemberg}
-    if unknown_state_parts and (
-        not confirmed_baden_wuerttemberg
-        or any(not _is_wuerttemberg(part) for part in unknown_state_parts)
-    ):
-        return None
+    unknown_state_parts = [
+        part
+        for part in unknown_state_parts
+        if not (confirmed_baden_wuerttemberg and _is_wuerttemberg(part))
+    ]
     while (
         len(city_parts) > 1
         and _is_wuerttemberg(city_parts[-1])
@@ -201,12 +225,13 @@ def _normalize_parts(city: str | None, state: str | None, country: str | None):
     ):
         city_parts.pop()
 
-    city_name = _without_postcode(", ".join(city_parts), code)
+    # Portals may split city qualifiers (such as "Donau") into the state field.
+    city_name = _without_postcode(", ".join([*city_parts, *unknown_state_parts]), code)
     return gazetteer.place(city_name, code, next(iter(regions), None))
 
 
 def normalize_location(location: Location) -> Location:
-    """Return a canonical copy only when country, place and region agree uniquely."""
+    """Return a canonical copy for an unambiguous or explicitly preferred place."""
     country = location.country
     if isinstance(country, Country):
         country = country.value[0]
