@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 import time
 from typing import Optional, List, Dict, Any
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -132,27 +133,39 @@ class Arbeitsagentur(Scraper):
         job_list = job_list[: scraper_input.results_wanted]
         return JobResponse(jobs=job_list)
 
-    def _fetch_job_description(self, job_url: str) -> Optional[str]:
+    def _fetch_job_details(self, job_url: str) -> tuple[Optional[str], Optional[str]]:
         """
-        Fetches the job detail page and extracts the full description text
-        from <div class="ba-copytext" id="detail-beschreibung-text-container">.
+        Fetches the description and external description URL from the detail page.
         """
         if not job_url:
-            return None
+            return None, None
 
+        job_url_direct = None
         try:
             timeout = getattr(self.scraper_input, "request_timeout", 15) if self.scraper_input else 15
             response = self.session.get(job_url, timeout=timeout)
             if response.status_code != 200:
                 log.warning(f"Failed to fetch Arbeitsagentur detail page {job_url}: status {response.status_code}")
-                return None
+                return None, None
 
             soup = BeautifulSoup(response.content, "html.parser")
+            external_link = soup.select_one(
+                "a#detail-beschreibung-externe-url-btn[href]"
+            ) or soup.select_one(
+                "#detail-beschreibung-extern a[href]:not(#externe-url-quelle)"
+            )
+            if external_link:
+                href = external_link.get("href", "").strip()
+                if href:
+                    external_url = urljoin(job_url, href)
+                    if urlsplit(external_url).scheme in ("http", "https"):
+                        job_url_direct = external_url
+
             desc_elem = soup.find(id="detail-beschreibung-text-container") or soup.find(
                 "div", class_=lambda c: c and "ba-copytext" in c.split()
             )
             if not desc_elem:
-                return None
+                return None, job_url_direct
 
             desc_elem = remove_attributes(desc_elem)
             html_desc = desc_elem.prettify(formatter="html")
@@ -166,15 +179,15 @@ class Arbeitsagentur(Scraper):
                 desc_format = DescriptionFormat(desc_format.lower())
 
             if desc_format == DescriptionFormat.HTML:
-                return html_desc
+                return html_desc, job_url_direct
             elif desc_format == DescriptionFormat.PLAIN:
-                return plain_converter(html_desc)
+                return plain_converter(html_desc), job_url_direct
             else:
-                return markdown_converter(html_desc)
+                return markdown_converter(html_desc), job_url_direct
 
         except Exception as e:
             log.warning(f"Error fetching detail description from {job_url}: {e}")
-            return None
+            return None, job_url_direct
 
     def _process_job_item(self, item: Dict[str, Any]) -> Optional[JobPost]:
         """
@@ -212,7 +225,8 @@ class Arbeitsagentur(Scraper):
         fallback_description = "\n".join(description_parts) if description_parts else None
 
         # Fetch full description from detail page
-        full_description = self._fetch_job_description(job_url)
+        full_description, external_description_url = self._fetch_job_details(job_url)
+        job_url_direct = external_description_url or job_url_direct
         description = full_description if full_description else fallback_description
 
         emails = extract_emails_from_text(description) if description else None
