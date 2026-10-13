@@ -37,6 +37,7 @@ from jobspy.model import (
     Scraper,
     ScraperInput,
     Site,
+    supplement_job_types_from_title,
 )
 from jobspy.ziprecruiter.util import (
     get_job_type_enum,
@@ -280,29 +281,7 @@ class ZipRecruiter(Scraper):
     def _supplement_job_type_from_title(
         title: str, job_types: list[JobType] | None
     ) -> list[JobType] | None:
-        title_types = []
-        patterns = (
-            (
-                r"\b(?:dualstudium|duale[srmn]?[\s-]+(?:\w+[\s-]+)?(?:\w*studium|studiengang)|dhbw)\b",
-                JobType.APPRENTICESHIP,
-            ),
-            (
-                r"\b(?:\w*praktik(?:um\w*|a|ant\w*)|werkstudent\w*|working[\s-]+student|internship)\b",
-                JobType.INTERNSHIP,
-            ),
-        )
-        for pattern, job_type in patterns:
-            if re.search(pattern, title, re.I):
-                title_types.append(job_type)
-
-        if not title_types:
-            return job_types
-
-        result = list(job_types or [])
-        for title_type in title_types:
-            if title_type not in result:
-                result.append(title_type)
-        return result
+        return supplement_job_types_from_title(title, job_types)
 
     @staticmethod
     def _parse_listing_date(date_text: str | None) -> date | None:

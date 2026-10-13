@@ -1,7 +1,15 @@
 from datetime import datetime, timedelta
 import re
 
-from jobspy.model import Country, JobPost, CompensationInterval, Compensation, Location, JobType
+from jobspy.model import (
+    Country,
+    JobPost,
+    CompensationInterval,
+    Compensation,
+    Location,
+    JobType,
+    normalize_job_types,
+)
 from jobspy.util import create_logger
 
 from bs4 import BeautifulSoup
@@ -284,7 +292,7 @@ def extract_job_type(description: str):
         if re.search(pattern, description, re.IGNORECASE):
             listing_types.append(key)
 
-    return listing_types if listing_types else None
+    return normalize_job_types(listing_types) if listing_types else None
 
 def find_job_info(jobs_data: list | dict) -> list | None:
     """Iterates through the JSON data to find the job listings"""

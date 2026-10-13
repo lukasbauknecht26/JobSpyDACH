@@ -5,7 +5,7 @@ import base64
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 
-from jobspy.model import Location, Country, JobType
+from jobspy.model import Location, Country, JobType, normalize_job_types
 
 
 def encode_refnr(refnr: str) -> str:
@@ -79,7 +79,7 @@ def parse_job_type_v6(item: Dict[str, Any]) -> Optional[List[JobType]]:
     elif "BEFRISTET" in (item.get("vertragsdauer") or "").upper():
         types.add(JobType.TEMPORARY)
 
-    return list(types) if types else None
+    return normalize_job_types(list(types)) if types else None
 
 
 def is_job_remote(item: Dict[str, Any]) -> bool:

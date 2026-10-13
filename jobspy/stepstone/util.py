@@ -6,7 +6,14 @@ from datetime import datetime, date, timedelta
 from typing import Optional, List, Any
 from bs4 import BeautifulSoup, Tag
 
-from jobspy.model import Location, Country, JobType, Compensation, CompensationInterval
+from jobspy.model import (
+    Location,
+    Country,
+    JobType,
+    Compensation,
+    CompensationInterval,
+    normalize_job_types,
+)
 
 
 def parse_location(location_text: Optional[str], default_country: Country = Country.GERMANY) -> Location:
@@ -149,7 +156,7 @@ def parse_job_types(soup: BeautifulSoup) -> Optional[List[JobType]]:
         if work_type_keyword in work_type and work_type_job_type not in job_types:
             job_types.append(work_type_job_type)
 
-    return job_types or None
+    return normalize_job_types(job_types) or None
 
 
 def is_job_remote(title: str, location_text: str = "", card_text: str = "") -> bool:

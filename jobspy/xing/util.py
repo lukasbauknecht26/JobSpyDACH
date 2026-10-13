@@ -15,6 +15,8 @@ from jobspy.model import (
     JobType,
     Location,
     SalarySource,
+    normalize_job_types,
+    supplement_job_types_from_title,
 )
 from jobspy.util import get_enum_from_job_type
 from jobspy.xing.constant import (
@@ -169,16 +171,9 @@ def parse_location(
 def parse_job_types(
     job: dict, posting: dict, state: dict, title: str
 ) -> list[JobType] | None:
-    if re.search(
-        r"\b(ausbildung|auszubildende\w*|azubi|duales? studium|apprentice\w*)\b",
-        title,
-        re.I,
-    ):
-        return [JobType.APPRENTICESHIP]
-    if re.search(
-        r"\b(werkstudent\w*|praktikant\w*|praktikum|internship)\b", title, re.I
-    ):
-        return [JobType.INTERNSHIP]
+    title_types = supplement_job_types_from_title(title, None)
+    if title_types:
+        return title_types
     employment = resolve(job.get("employmentType"), state)
     values = posting.get("employmentType") or []
     if not isinstance(values, list):
@@ -200,7 +195,7 @@ def parse_job_types(
         kind = kind or get_enum_from_job_type(value.replace("_", " "))
         if kind and kind not in result:
             result.append(kind)
-    return result or None
+    return normalize_job_types(result) or None
 
 
 def parse_remote(job: dict, posting: dict) -> bool | None:

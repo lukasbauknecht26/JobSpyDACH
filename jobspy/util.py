@@ -11,7 +11,7 @@ import urllib3
 from markdownify import markdownify as md
 from requests.adapters import HTTPAdapter, Retry
 
-from jobspy.model import CompensationInterval, JobType, Site
+from jobspy.model import CompensationInterval, JobType, Site, normalize_job_types
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -302,7 +302,7 @@ def extract_job_type(description: str):
         if re.search(pattern, description, re.IGNORECASE):
             listing_types.append(key)
 
-    return listing_types if listing_types else None
+    return normalize_job_types(listing_types) if listing_types else None
 
 
 def map_str_to_site(site_name: str) -> Site:

@@ -1,4 +1,4 @@
-from jobspy.model import CompensationInterval, JobType, Compensation
+from jobspy.model import CompensationInterval, JobType, Compensation, normalize_job_types
 from jobspy.util import get_enum_from_job_type
 
 
@@ -14,7 +14,7 @@ def get_job_type(attributes: list) -> list[JobType]:
         job_type = get_enum_from_job_type(job_type_str)
         if job_type:
             job_types.append(job_type)
-    return job_types
+    return normalize_job_types(job_types)
 
 
 def get_compensation(compensation: dict) -> Compensation | None:

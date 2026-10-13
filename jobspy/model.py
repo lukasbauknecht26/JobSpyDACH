@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Literal, Optional
 from datetime import date
 from enum import Enum
-from pydantic import BaseModel, Field
+import re
+from pydantic import BaseModel, Field, model_validator
 
 
 class JobType(Enum):
@@ -64,6 +65,48 @@ class JobType(Enum):
     OTHER = ("other",)
     SUMMER = ("summer",)
     VOLUNTEER = ("volunteer",)
+
+
+def normalize_job_types(job_types: list[JobType] | None) -> list[JobType] | None:
+    """Keep training categories exclusive of other employment types."""
+    if not job_types:
+        return job_types
+    training_types = [
+        job_type
+        for job_type in job_types
+        if job_type in (JobType.APPRENTICESHIP, JobType.INTERNSHIP)
+    ]
+    return training_types or job_types
+
+
+def supplement_job_types_from_title(
+    title: str, job_types: list[JobType] | None
+) -> list[JobType] | None:
+    """Recognize training roles from titles even when source metadata is missing."""
+    patterns = (
+        (
+            r"\b(?:ausbildung|auszubildende\w*|azubi\w*|apprentice\w*|"
+            r"dualstudium|duale[srmn]?[\s-]+(?:\w+[\s-]+)?"
+            r"(?:\w*studium|studiengang)|dual[\s-]+(?:study|studies|course)|dhbw)\b",
+            JobType.APPRENTICESHIP,
+        ),
+        (
+            r"\b(?:\w*praktik(?:um\w*|a|ant\w*)|werkstudent\w*|"
+            r"working[\s-]+student\w*|student(?:s|en|in(?:nen)?|innen)?|"
+            r"intern(?:s|ship(?:s)?)?)\b",
+            JobType.INTERNSHIP,
+        ),
+    )
+    title_types = [
+        job_type for pattern, job_type in patterns if re.search(pattern, title, re.I)
+    ]
+    if not title_types:
+        return normalize_job_types(job_types)
+    result = list(job_types or [])
+    for job_type in title_types:
+        if job_type not in result:
+            result.append(job_type)
+    return normalize_job_types(result)
 
 
 class Country(Enum):
@@ -253,6 +296,11 @@ class DescriptionFormat(Enum):
     PLAIN = "plain"
 
 class JobPost(BaseModel):
+    @model_validator(mode="after")
+    def normalize_job_type(self) -> JobPost:
+        self.job_type = supplement_job_types_from_title(self.title, self.job_type)
+        return self
+
     id: str | None = None
     title: str
     company_name: str | None

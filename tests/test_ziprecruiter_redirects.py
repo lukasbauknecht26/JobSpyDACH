@@ -94,12 +94,14 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         self.assertEqual(job.job_url, target_url)
         self.assertNotIn("alertsclk.com", job.job_url)
 
-    def test_title_supplements_detail_employment_type(self):
+    def test_title_training_type_replaces_detail_employment_type(self):
         cases = (
             ("Pflichtpraktikum Softwareentwicklung", JobType.INTERNSHIP),
             ("Praktikantin im Marketing", JobType.INTERNSHIP),
             ("Werkstudententätigkeit IT", JobType.INTERNSHIP),
             ("Working Student Finance", JobType.INTERNSHIP),
+            ("Students - Cloud Backend & Infrastructure (m/f/d)", JobType.INTERNSHIP),
+            ("Ausbildung IT", JobType.APPRENTICESHIP),
             ("Duales Studium Informatik", JobType.APPRENTICESHIP),
             ("Duales Bachelorstudium BWL", JobType.APPRENTICESHIP),
             ("Dualer Studiengang Informatik", JobType.APPRENTICESHIP),
@@ -113,7 +115,7 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
 
                 job = scraper._process_job(self._listing(title=title))
 
-                self.assertEqual(job.job_type, [JobType.FULL_TIME, expected_type])
+                self.assertEqual(job.job_type, [expected_type])
 
     def test_title_type_is_added_without_detail_metadata_or_duplicates(self):
         scraper = self._scraper()
@@ -134,8 +136,16 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
             [JobType.INTERNSHIP, JobType.APPRENTICESHIP],
         )
 
+    def test_students_title_is_detected_without_detail_metadata(self):
+        scraper = self._scraper()
+        scraper._get_descr = Mock(return_value={})
+        job = scraper._process_job(self._listing(
+            title="Students - Cloud Backend &amp; Infrastructure (m/f/d)"
+        ))
+        self.assertEqual(job.job_type, [JobType.INTERNSHIP])
+
     def test_unspecific_titles_keep_detail_type(self):
-        for title in ("Bachelor Professional IT", "Interne Kommunikation", "Ausbildung IT"):
+        for title in ("Bachelor Professional IT", "Interne Kommunikation"):
             with self.subTest(title=title):
                 self.assertEqual(
                     ZipRecruiter._supplement_job_type_from_title(
@@ -163,7 +173,7 @@ class ZipRecruiterRedirectTests(unittest.TestCase):
         )
 
         self.assertIs(job, delegated_job)
-        self.assertEqual(job.job_type, [JobType.PART_TIME, JobType.INTERNSHIP])
+        self.assertEqual(job.job_type, [JobType.INTERNSHIP])
 
     def test_listing_date_takes_precedence_over_detail_date(self):
         scraper = self._scraper()
