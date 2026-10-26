@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -13,12 +14,14 @@ log = create_logger("ZipRecruiter")
 
 
 def is_cloudflare_challenge(headers: dict, html: str) -> bool:
+    """Detect blocking challenges, excluding passive JavaScript detections."""
     headers = {key.lower(): value for key, value in headers.items()}
     return headers.get("cf-mitigated") == "challenge" or (
         "cloudflare" in str(headers.get("server", "")).lower()
         and (
             "just a moment" in html[:2000].lower()
-            or "/cdn-cgi/challenge-platform/" in html
+            or re.search(r"/cdn-cgi/challenge-platform/[^\s\"'<>]*orchestrate/", html)
+            is not None
         )
     )
 

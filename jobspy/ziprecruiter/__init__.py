@@ -482,8 +482,8 @@ class ZipRecruiter(Scraper):
 
             # Fallback to HTML description if not in JSON-LD
             if not data["description"]:
-                job_descr_div = soup.find("div", class_="job_description") or soup.find(
-                    "div", class_="job-description"
+                job_descr_div = soup.select_one(
+                    "div.job_description, div.job-description, div.job-body"
                 )
                 if job_descr_div:
                     data["description"] = remove_attributes(job_descr_div).prettify(
