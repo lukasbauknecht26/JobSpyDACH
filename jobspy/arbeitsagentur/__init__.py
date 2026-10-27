@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import random
 import time
+from datetime import date, datetime, timedelta
+from math import ceil
 from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlsplit
 
@@ -81,9 +83,12 @@ class Arbeitsagentur(Scraper):
             params["wo"] = scraper_input.location
             params["umkreis"] = scraper_input.distance if scraper_input.distance is not None else 25
 
-        if scraper_input.hours_old:
-            days_old = max(1, scraper_input.hours_old // 24)
-            params["veroeffentlichtab"] = days_old
+        cutoff_date = None
+        if scraper_input.hours_old is not None:
+            cutoff_date = (datetime.now() - timedelta(hours=scraper_input.hours_old)).date()
+            days_old = max(0, ceil(scraper_input.hours_old / 24))
+            if days_old <= 100:
+                params["veroeffentlichtseit"] = days_old
 
         while len(job_list) < scraper_input.results_wanted:
             params["page"] = page
@@ -106,12 +111,21 @@ class Arbeitsagentur(Scraper):
                     log.info("No more jobs found from Arbeitsagentur.")
                     break
 
-                initial_count = len(job_list)
+                initial_count = len(seen_ids)
                 for item in items:
                     try:
+                        refnr = item.get("referenznummer")
+                        if not refnr or refnr in seen_ids:
+                            continue
+                        seen_ids.add(refnr)
+                        # The API may ignore its age filter. Check first publication
+                        # locally before fetching details; dates have day precision.
+                        if cutoff_date is not None:
+                            posted = self._get_date_posted(item)
+                            if posted is None or posted < cutoff_date:
+                                continue
                         job_post = self._process_job_item(item)
-                        if job_post and job_post.id not in seen_ids:
-                            seen_ids.add(job_post.id)
+                        if job_post:
                             job_list.append(job_post)
                             if len(job_list) >= scraper_input.results_wanted:
                                 break
@@ -119,7 +133,7 @@ class Arbeitsagentur(Scraper):
                         log.error(f"Error processing Arbeitsagentur job item: {e}")
                         continue
 
-                if len(job_list) == initial_count:
+                if len(seen_ids) == initial_count:
                     log.info("No new unique jobs on this page. Ending pagination.")
                     break
 
@@ -189,6 +203,13 @@ class Arbeitsagentur(Scraper):
             log.warning(f"Error fetching detail description from {job_url}: {e}")
             return None, job_url_direct
 
+    @staticmethod
+    def _get_date_posted(item: Dict[str, Any]) -> Optional[date]:
+        date_posted_str = item.get("datumErsteVeroeffentlichung")
+        if not date_posted_str and isinstance(item.get("veroeffentlichungszeitraum"), dict):
+            date_posted_str = item["veroeffentlichungszeitraum"].get("von")
+        return parse_date(date_posted_str)
+
     def _process_job_item(self, item: Dict[str, Any]) -> Optional[JobPost]:
         """
         Transforms a REST API v6 job entry into a JobPost object.
@@ -206,10 +227,7 @@ class Arbeitsagentur(Scraper):
         location = parse_location(item.get("stellenlokationen"))
         
         # Parse date posted
-        date_posted_str = item.get("datumErsteVeroeffentlichung")
-        if not date_posted_str and isinstance(item.get("veroeffentlichungszeitraum"), dict):
-            date_posted_str = item.get("veroeffentlichungszeitraum", {}).get("von")
-        date_posted = parse_date(date_posted_str)
+        date_posted = self._get_date_posted(item)
 
         job_types = parse_job_type_v6(item)
         hauptberuf = item.get("hauptberuf")

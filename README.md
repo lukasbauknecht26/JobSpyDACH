@@ -181,6 +181,8 @@ Optional
 ├── hours_old (int): 
 |    filters jobs by the number of hours since the job was posted 
 |    (ZipRecruiter and Glassdoor round up to next day.)
+  |    Arbeitsagentur checks first publication locally with day precision;
+  |    the cutoff day is included. Missing/invalid dates are skipped when filtering.
 │
 ├── verbose (int) {0, 1, 2}: 
 |    Controls the verbosity of the runtime printouts 
