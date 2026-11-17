@@ -1,0 +1,12 @@
+{
+  "key": "example-key",
+  "title": "Software Developer",
+  "datePublished": 1793098800000,
+  "dateOnIndeed": 1793098800000,
+  "description": {"html": "<p>Develop Java software.</p><p>100% remote in Germany.</p>"},
+  "attributes": [{"key":"DSQF7","label":"Remote"},{"key":"CF3CP","label":"Full-time"}],
+  "location": {"city":null,"admin1Code":null,"countryCode":"DE","formatted":{"long":"Home Office"}},
+  "compensation": {"baseSalary":null,"estimated":null,"currencyCode":"EUR"},
+  "employer": {"name":"Example GmbH","dossier":null,"relativeCompanyPageUrl":"/cmp/example"},
+  "recruit": {"viewJobUrl":"https://example.org/jobs/developer"}
+}

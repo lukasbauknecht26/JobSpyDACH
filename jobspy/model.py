@@ -57,7 +57,7 @@ class JobType(Enum):
         "ausbildung",
         "duales studium",
         "dhbw",
-        "studium"
+        "studium",
     )
 
     PER_DIEM = ("perdiem",)
@@ -295,6 +295,30 @@ class DescriptionFormat(Enum):
     HTML = "html"
     PLAIN = "plain"
 
+
+class RemoteLocation(BaseModel):
+    """An actual applicant location restriction, not a search location."""
+
+    name: str
+    kind: Literal["country", "region", "unknown"] = "unknown"
+
+
+class RemoteMetadata(BaseModel):
+    """Source evidence kept separate from inferred/display location fields."""
+
+    description_complete: bool = False
+    description_text: str | None = None
+    full_remote: bool = False
+    hybrid: bool = False
+    onsite: bool = False
+    # Some sources advertise an upper bound. This alone is not a minimum guarantee.
+    advertised_percent: float | None = None
+    job_countries: list[str] = Field(default_factory=list)
+    has_applicant_restrictions: bool = False
+    applicant_locations: list[RemoteLocation] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
 class JobPost(BaseModel):
     @model_validator(mode="after")
     def normalize_job_type(self) -> JobPost:
@@ -317,6 +341,11 @@ class JobPost(BaseModel):
     date_posted: date | None = None
     emails: list[str] | None = None
     is_remote: bool | None = None
+    remote_min_percent: float | None = None
+    remote_evidence: str | None = None
+    remote_metadata: RemoteMetadata = Field(
+        default_factory=RemoteMetadata, exclude=True
+    )
     listing_type: str | None = None
 
     # LinkedIn specific
@@ -335,6 +364,7 @@ class JobPost(BaseModel):
 
     # LinkedIn only atm
     job_function: str | None = None
+
 
 class JobResponse(BaseModel):
     jobs: list[JobPost] = []
@@ -362,6 +392,9 @@ class ScraperInput(BaseModel):
     location_country: Country | None = None
     distance: int | None = None  # in km
     is_remote: bool = False
+    remote_mode: Literal["strict"] | None = None
+    remote_max_candidates: int = Field(default=100, gt=0, le=1000)
+    remote_max_seconds: float = Field(default=120, gt=0, allow_inf_nan=False)
     job_type: JobType | None = None
     easy_apply: bool | None = None
     offset: int = 0
@@ -378,10 +411,39 @@ class ScraperInput(BaseModel):
     ziprecruiter_browser_timeout: int = Field(default=180, gt=0)
     ziprecruiter_browser_mode: Literal["system", "playwright"] = "system"
 
+    @model_validator(mode="after")
+    def validate_strict_remote(self) -> ScraperInput:
+        if self.remote_mode == "strict":
+            if self.country != Country.GERMANY:
+                raise ValueError('remote_mode="strict" requires country="germany"')
+            if self.location and self.location.strip().casefold() not in {
+                "de",
+                "deutschland",
+                "germany",
+            }:
+                raise ValueError(
+                    "Strict remote search accepts Germany or no location, not a city"
+                )
+            if self.offset < 0 or self.results_wanted < 0:
+                raise ValueError(
+                    "Strict remote offset and results_wanted must be non-negative"
+                )
+            if self.hours_old is not None and self.hours_old < 0:
+                raise ValueError("hours_old must be non-negative")
+            self.location = None
+            self.distance = None
+            self.is_remote = True
+            self.linkedin_fetch_description = True
+        return self
+
 
 class Scraper(ABC):
     def __init__(
-        self, site: Site, proxies: list[str] | None = None, ca_cert: str | None = None, user_agent: str | None = None
+        self,
+        site: Site,
+        proxies: list[str] | None = None,
+        ca_cert: str | None = None,
+        user_agent: str | None = None,
     ):
         self.site = site
         self.proxies = proxies

@@ -11,6 +11,7 @@ from jobspy.model import (
     DescriptionFormat,
     JobPost,
     JobResponse,
+    RemoteMetadata,
     Scraper,
     ScraperInput,
     Site,
@@ -22,12 +23,19 @@ from jobspy.util import (
     markdown_converter,
     plain_converter,
 )
+from jobspy.remote import (
+    StrictRemoteSearch,
+    is_strict,
+    metadata_from_job_posting,
+    extract_job_posting as extract_remote_job_posting,
+)
 from jobspy.xing.constant import (
     COUNTRY_NAMES,
     EMPLOYMENT_FILTERS,
     JOBS_PER_PAGE,
     MAX_PAGES,
     REMOTE_FILTER,
+    FULL_REMOTE_FILTER,
     SEARCH_URL,
     headers,
 )
@@ -77,6 +85,10 @@ class Xing(Scraper):
         self._has_requested = False
         if scraper_input.results_wanted <= 0:
             return JobResponse(jobs=[])
+        strict = (
+            StrictRemoteSearch(scraper_input, log) if is_strict(scraper_input) else None
+        )
+        target = strict.target if strict else scraper_input.results_wanted
 
         now = datetime.now(timezone.utc)
         cutoff = (
@@ -85,14 +97,14 @@ class Xing(Scraper):
             else None
         )
         params = self._search_params(scraper_input, cutoff)
-        offset = max(0, scraper_input.offset or 0)
+        offset = 0 if strict else max(0, scraper_input.offset or 0)
         first_page, skip = divmod(offset, JOBS_PER_PAGE)
         jobs = []
         seen_ids = set()
         seen_pages = set()
 
         for page in range(first_page + 1, MAX_PAGES + 1):
-            if self._blocked:
+            if self._blocked or strict and strict.done:
                 break
             log.info("Fetching Xing search page %s", page)
             result = self._search_page({**params, "page": page})
@@ -113,7 +125,7 @@ class Xing(Scraper):
             new_ids = False
 
             for index, candidate in enumerate(candidates):
-                if self._blocked or len(jobs) >= scraper_input.results_wanted:
+                if self._blocked or len(jobs) >= target or strict and strict.done:
                     break
                 if candidate.get("__typename") != "VisibleJob":
                     continue
@@ -122,6 +134,8 @@ class Xing(Scraper):
                     identifier = job_id(candidate.get("id"), url or "")
                     if not url or not identifier or identifier in seen_ids:
                         continue
+                    if strict and not strict.visit(identifier):
+                        continue
                     seen_ids.add(identifier)
                     new_ids = True
                     if page == first_page + 1 and index < skip:
@@ -129,18 +143,20 @@ class Xing(Scraper):
                     post = self._process_job(
                         candidate, state, url, identifier, now, cutoff
                     )
-                    if post:
+                    if strict.accept(post) if strict else post is not None:
                         jobs.append(post)
                 except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    if strict:
+                        strict.reject("malformed_job")
                     log.warning("Skipping malformed Xing job: %s", exc)
 
-            if len(jobs) >= scraper_input.results_wanted:
+            if len(jobs) >= target or strict and strict.done:
                 break
             if not new_ids or len(entries) < JOBS_PER_PAGE:
                 break
             if total is not None and page * JOBS_PER_PAGE >= total:
                 break
-        return JobResponse(jobs=jobs)
+        return strict.finish(jobs) if strict else JobResponse(jobs=jobs)
 
     @staticmethod
     def _search_params(scraper_input: ScraperInput, cutoff: datetime | None) -> dict:
@@ -155,7 +171,9 @@ class Xing(Scraper):
         if scraper_input.job_type in EMPLOYMENT_FILTERS:
             params["employmentType"] = EMPLOYMENT_FILTERS[scraper_input.job_type]
         if scraper_input.is_remote:
-            params["remoteOption"] = REMOTE_FILTER
+            params["remoteOption"] = (
+                FULL_REMOTE_FILTER if is_strict(scraper_input) else REMOTE_FILTER
+            )
         if cutoff:
             params["since"] = cutoff.isoformat(timespec="seconds").replace(
                 "+00:00", "Z"
@@ -217,13 +235,18 @@ class Xing(Scraper):
     ) -> JobPost | None:
         state = search_state
         posting = {}
+        detail = {}
         job = candidate
         response = self._get(url)
         if response is not None and response.status_code in {404, 410}:
             return None
         if response is not None and response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            posting = extract_job_posting(soup, identifier)
+            posting = (
+                extract_remote_job_posting(soup, url)
+                if is_strict(self.scraper_input)
+                else extract_job_posting(soup, identifier)
+            )
             try:
                 detail_state = extract_apollo_state(soup)
                 state = {**search_state, **detail_state}
@@ -256,15 +279,21 @@ class Xing(Scraper):
 
         if cutoff and (posted is None or posted < cutoff):
             return None
-        if self.scraper_input.country in COUNTRY_NAMES and (
-            location is None or location.country != self.scraper_input.country
+        if (
+            not is_strict(self.scraper_input)
+            and self.scraper_input.country in COUNTRY_NAMES
+            and (location is None or location.country != self.scraper_input.country)
         ):
             return None
         if self.scraper_input.job_type and self.scraper_input.job_type not in (
             job_types or []
         ):
             return None
-        if self.scraper_input.is_remote and remote is not True:
+        if (
+            self.scraper_input.is_remote
+            and remote is not True
+            and not is_strict(self.scraper_input)
+        ):
             return None
         if (
             self.scraper_input.easy_apply is not None
@@ -280,6 +309,7 @@ class Xing(Scraper):
             and description_data.get("__typename") == "TextDescription"
         ):
             description = escape(description)
+        raw_description = description
         description = self._format_description(description)
         organization = resolve(posting.get("hiringOrganization"), state)
         company_info = resolve(job.get("companyInfo"), state)
@@ -290,6 +320,30 @@ class Xing(Scraper):
             logo = logo.get("url")
         company_url = http_url(organization.get("url") or company.get("url"))
         website = http_url(organization.get("sameAs"))
+
+        remote_metadata = RemoteMetadata()
+        if is_strict(self.scraper_input):
+            remote_metadata = metadata_from_job_posting(
+                posting,
+                description_complete=bool(
+                    posting.get("description")
+                    or resolve(detail.get("description"), state).get("content")
+                ),
+            )
+            remote_metadata.description_text = raw_description
+            options = job.get("remoteOptions") or []
+            if "FULL_REMOTE" in options:
+                remote_metadata.full_remote = True
+                remote_metadata.evidence.append("Xing remoteOptions=FULL_REMOTE")
+            remote_metadata.hybrid = "PARTLY_REMOTE" in options
+            remote_metadata.onsite = (
+                "NON_REMOTE" in options and "FULL_REMOTE" not in options
+            )
+            if location and location.country:
+                country = location.country
+                remote_metadata.job_countries.append(
+                    country.value[0] if hasattr(country, "value") else str(country)
+                )
 
         return JobPost(
             id=f"xing-{identifier}",
@@ -311,6 +365,7 @@ class Xing(Scraper):
             date_posted=posted.date() if posted else None,
             job_type=job_types,
             is_remote=remote,
+            remote_metadata=remote_metadata,
             compensation=parse_compensation(job, posting, state),
             description=description,
             emails=extract_emails_from_text(description),

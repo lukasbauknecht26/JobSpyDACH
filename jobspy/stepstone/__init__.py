@@ -18,8 +18,15 @@ from jobspy.model import (
     Country,
     DescriptionFormat,
     JobType,
+    RemoteMetadata,
 )
-from jobspy.stepstone.constant import headers, job_card_selectors
+from jobspy.stepstone.constant import headers, job_card_selectors, REMOTE_WORK_POLICY
+from jobspy.remote import (
+    StrictRemoteSearch,
+    extract_job_posting,
+    is_strict,
+    metadata_from_job_posting,
+)
 from jobspy.stepstone.util import (
     parse_location,
     parse_relative_date,
@@ -44,12 +51,14 @@ class StepStone(Scraper):
     band_delay = 2
 
     def __init__(
-            self,
-            proxies: list[str] | str | None = None,
-            ca_cert: str | None = None,
-            user_agent: str | None = None,
+        self,
+        proxies: list[str] | str | None = None,
+        ca_cert: str | None = None,
+        user_agent: str | None = None,
     ):
-        super().__init__(Site.STEPSTONE, proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
+        super().__init__(
+            Site.STEPSTONE, proxies=proxies, ca_cert=ca_cert, user_agent=user_agent
+        )
         self.session = create_session(
             proxies=self.proxies,
             ca_cert=ca_cert,
@@ -72,14 +81,27 @@ class StepStone(Scraper):
         Scrapes StepStone jobs based on criteria in scraper_input.
         """
         self.scraper_input = scraper_input
+        self._blocked = False
+        strict = (
+            StrictRemoteSearch(scraper_input, log) if is_strict(scraper_input) else None
+        )
+        target = strict.target if strict else scraper_input.results_wanted
         job_list: list[JobPost] = []
         seen_ids = set()
         page = 1
         base_url = self._get_base_url(scraper_input.country)
 
         # Build base search path
-        query_part = urllib.parse.quote(scraper_input.search_term.strip()) if scraper_input.search_term else ""
-        location_part = urllib.parse.quote(scraper_input.location.strip()) if scraper_input.location else ""
+        query_part = (
+            urllib.parse.quote(scraper_input.search_term.strip())
+            if scraper_input.search_term
+            else ""
+        )
+        location_part = (
+            urllib.parse.quote(scraper_input.location.strip())
+            if scraper_input.location
+            else ""
+        )
 
         if query_part and location_part:
             path = f"/jobs/{query_part}/in-{location_part}"
@@ -92,14 +114,22 @@ class StepStone(Scraper):
 
         search_url = f"{base_url}{path}"
 
-        while len(job_list) < scraper_input.results_wanted:
+        while (
+            len(job_list) < target
+            and not self._blocked
+            and not (strict and strict.done)
+        ):
             params: Dict[str, Any] = {"page": page}
+            if strict:
+                params["wp"] = REMOTE_WORK_POLICY
             if scraper_input.distance is not None:
                 params["radius"] = scraper_input.distance
             if scraper_input.hours_old:
                 params["days"] = max(1, scraper_input.hours_old // 24)
 
-            log.info(f"Fetching StepStone page {page} from {search_url} (params: {params})")
+            log.info(
+                f"Fetching StepStone page {page} from {search_url} (params: {params})"
+            )
 
             try:
                 # Use timeout_seconds for tls_client session
@@ -118,12 +148,20 @@ class StepStone(Scraper):
                 job_cards = self._extract_job_cards(soup)
 
                 if not job_cards:
-                    log.info(f"No job cards found on StepStone page {page}. Ending pagination.")
+                    log.info(
+                        f"No job cards found on StepStone page {page}. Ending pagination."
+                    )
                     break
 
                 initial_count = len(job_list)
+                initial_candidates = len(strict.seen) if strict else 0
                 for card in job_cards:
-                    if len(job_list) >= scraper_input.results_wanted:
+                    if (
+                        self._blocked
+                        or len(job_list) >= target
+                        or strict
+                        and strict.done
+                    ):
                         break
                     try:
                         # Quick check to skip already seen job IDs before fetching detail page
@@ -136,24 +174,47 @@ class StepStone(Scraper):
                         )
                         if not title_link or not title_link.get("href"):
                             continue
-                        candidate_url = urllib.parse.urljoin(base_url, title_link["href"])
+                        candidate_url = urllib.parse.urljoin(
+                            base_url, title_link["href"]
+                        )
                         candidate_id = f"stepstone-{abs(hash(candidate_url))}"
                         if candidate_id in seen_ids:
                             continue
+                        if strict:
+                            parts = urllib.parse.urlsplit(candidate_url)
+                            identifier = urllib.parse.urlunsplit(
+                                (parts.scheme, parts.netloc, parts.path, "", "")
+                            )
+                            if not strict.visit(identifier):
+                                continue
 
                         job_post = self._process_card(card, base_url)
-                        if job_post and job_post.id not in seen_ids:
+                        accepted = (
+                            strict.accept(job_post) if strict else job_post is not None
+                        )
+                        if accepted and job_post.id not in seen_ids:
                             seen_ids.add(job_post.id)
                             job_list.append(job_post)
-                            if len(job_list) >= scraper_input.results_wanted:
+                            if len(job_list) >= target:
                                 break
                             time.sleep(random.uniform(0.3, 0.7))
                     except Exception as e:
+                        if strict:
+                            strict.reject("malformed_job")
                         log.error(f"Error processing StepStone card: {e}")
                         continue
 
-                if len(job_list) == initial_count:
-                    log.info("No new unique jobs found on this page. Ending pagination.")
+                if (
+                    (len(strict.seen) == initial_candidates)
+                    if strict
+                    else (len(job_list) == initial_count)
+                ):
+                    log.info(
+                        "No new unique jobs found on this page. Ending pagination."
+                    )
+                    break
+
+                if self._blocked or strict and strict.done:
                     break
 
                 page += 1
@@ -163,6 +224,8 @@ class StepStone(Scraper):
                 log.error(f"Error during StepStone scraping: {e}")
                 break
 
+        if strict:
+            return strict.finish(job_list)
         job_list = job_list[: scraper_input.results_wanted]
         return JobResponse(jobs=job_list)
 
@@ -171,16 +234,25 @@ class StepStone(Scraper):
         Extracts valid job listing cards, filtering out filter/facet-only cards.
         """
         # Select cards that have an actual job link
-        cards = soup.select("article[data-at='job-item'], article[data-genesis-element='CARD']")
+        cards = soup.select(
+            "article[data-at='job-item'], article[data-genesis-element='CARD']"
+        )
         valid_cards = []
         for card in cards:
-            if card.find("a",
-                         href=lambda h: h and ("/stellenangebote--" in h or "/jobs--" in h or "-inline.html" in h)):
+            if card.find(
+                "a",
+                href=lambda h: h
+                and (
+                    "/stellenangebote--" in h or "/jobs--" in h or "-inline.html" in h
+                ),
+            ):
                 valid_cards.append(card)
 
         if not valid_cards:
             # Fallback to any element containing job links
-            job_links = soup.find_all("a", href=lambda h: h and ("/stellenangebote--" in h or "/jobs--" in h))
+            job_links = soup.find_all(
+                "a", href=lambda h: h and ("/stellenangebote--" in h or "/jobs--" in h)
+            )
             for link in job_links:
                 parent = link.find_parent("article") or link.find_parent("div")
                 if parent and parent not in valid_cards:
@@ -191,43 +263,72 @@ class StepStone(Scraper):
     def _fetch_job_details(
         self, job_url: str
     ) -> tuple[Optional[str], Optional[List[JobType]], bool]:
+        description, job_types, is_gone, _ = self._fetch_job_details_with_remote(
+            job_url
+        )
+        return description, job_types, is_gone
+
+    def _fetch_job_details_with_remote(
+        self, job_url: str
+    ) -> tuple[Optional[str], Optional[List[JobType]], bool, RemoteMetadata]:
         """
         Fetches the job detail page and extracts the description and job types.
         Target container: <div class="job-ad-display-..."> (e.g. job-ad-display-1t26un2 or job-ad-display-e6cidt)
         or data-at="job-ad-content".
         """
+        metadata = RemoteMetadata()
         if not job_url:
-            return None, None, False
+            return None, None, False, metadata
 
         try:
-            timeout_s = getattr(self.scraper_input, "request_timeout", 30) if self.scraper_input else 30
+            timeout_s = (
+                getattr(self.scraper_input, "request_timeout", 30)
+                if self.scraper_input
+                else 30
+            )
             response = self.session.get(job_url, timeout_seconds=timeout_s)
             if response.status_code != 200:
-                log.warning(f"Failed to fetch StepStone detail page {job_url}: status {response.status_code}")
-                return None, None, response.status_code == 410
+                if is_strict(self.scraper_input) and response.status_code in {403, 429}:
+                    self._blocked = True
+                log.warning(
+                    f"Failed to fetch StepStone detail page {job_url}: status {response.status_code}"
+                )
+                return None, None, response.status_code == 410, metadata
 
             soup = BeautifulSoup(response.text, "html.parser")
             job_types = parse_job_types(soup)
+            posting = (
+                extract_job_posting(soup, job_url)
+                if is_strict(self.scraper_input)
+                else {}
+            )
+            metadata = metadata_from_job_posting(posting)
 
             # 1. Primary: data-at="job-ad-content" / data-atx-component="JobAdContent" (carries class job-ad-display-*)
-            desc_elem = (
-                soup.find("div", attrs={"data-at": "job-ad-content"})
-                or soup.find("div", attrs={"data-atx-component": "JobAdContent"})
-            )
+            desc_elem = soup.find(
+                "div", attrs={"data-at": "job-ad-content"}
+            ) or soup.find("div", attrs={"data-atx-component": "JobAdContent"})
 
             # 2. Fallback: div with class starting with job-ad-display- that contains section-text
             if not desc_elem:
                 for div in soup.find_all("div"):
                     classes = div.get("class", [])
                     if any(c.startswith("job-ad-display-") for c in classes):
-                        if div.find(attrs={"data-at": re.compile(r"^section-text-")}) or div.find(
-                            class_=re.compile(r"^at-section-text-")
-                        ):
+                        if div.find(
+                            attrs={"data-at": re.compile(r"^section-text-")}
+                        ) or div.find(class_=re.compile(r"^at-section-text-")):
                             desc_elem = div
                             break
 
-            # 3. Fallback: div with class starting with job-ad-display- having substantial text
-            if not desc_elem:
+            if (
+                not desc_elem
+                and is_strict(self.scraper_input)
+                and isinstance(posting.get("description"), str)
+            ):
+                desc_elem = BeautifulSoup(posting["description"], "html.parser")
+
+            # 3. Legacy fallback: an arbitrary large container is not strict evidence.
+            if not desc_elem and not is_strict(self.scraper_input):
                 candidates = []
                 for div in soup.find_all("div"):
                     classes = div.get("class", [])
@@ -240,7 +341,8 @@ class StepStone(Scraper):
                     desc_elem = candidates[0][1]
 
             if not desc_elem:
-                return None, job_types, False
+                return None, job_types, False, metadata
+            metadata.description_complete = bool(desc_elem.get_text(strip=True))
 
             # Decompose style, script, and svg tags so CSS emotion styles do not contaminate the text
             for tag in desc_elem.find_all(["style", "script", "svg"]):
@@ -248,13 +350,20 @@ class StepStone(Scraper):
 
             # Clean attribute noise from descendant elements while preserving essential links/images
             for tag in desc_elem.find_all(True):
-                tag.attrs = {k: v for k, v in tag.attrs.items() if k in ("href", "src", "alt", "title")}
+                tag.attrs = {
+                    k: v
+                    for k, v in tag.attrs.items()
+                    if k in ("href", "src", "alt", "title")
+                }
 
             desc_elem = remove_attributes(desc_elem)
             html_desc = desc_elem.prettify(formatter="html")
+            metadata.description_text = html_desc
 
             desc_format = (
-                getattr(self.scraper_input, "description_format", DescriptionFormat.MARKDOWN)
+                getattr(
+                    self.scraper_input, "description_format", DescriptionFormat.MARKDOWN
+                )
                 if self.scraper_input
                 else DescriptionFormat.MARKDOWN
             )
@@ -262,15 +371,15 @@ class StepStone(Scraper):
                 desc_format = DescriptionFormat(desc_format.lower())
 
             if desc_format == DescriptionFormat.HTML:
-                return html_desc, job_types, False
+                return html_desc, job_types, False, metadata
             elif desc_format == DescriptionFormat.PLAIN:
-                return plain_converter(html_desc), job_types, False
+                return plain_converter(html_desc), job_types, False, metadata
             else:
-                return markdown_converter(html_desc), job_types, False
+                return markdown_converter(html_desc), job_types, False, metadata
 
         except Exception as e:
             log.warning(f"Error fetching detail description from {job_url}: {e}")
-            return None, None, False
+            return None, None, False, metadata
 
     def process_job_url(
         self,
@@ -285,7 +394,9 @@ class StepStone(Scraper):
         """Builds a StepStone job from a resolved detail URL and fallback card data."""
         description, job_type, is_gone = self._fetch_job_details(job_url)
         if is_gone:
-            log.info(f"Skipping unavailable StepStone job {job_url}: detail page returned 410")
+            log.info(
+                f"Skipping unavailable StepStone job {job_url}: detail page returned 410"
+            )
             return None
 
         return JobPost(
@@ -308,11 +419,11 @@ class StepStone(Scraper):
         """
         # Extract title and URL
         title_link = (
-                card.select_one("a[data-at='job-item-title']")
-                or card.select_one("a[href*='/stellenangebote--']")
-                or card.select_one("a[href*='/jobs--']")
-                or card.select_one("h2 a")
-                or card.select_one("a")
+            card.select_one("a[data-at='job-item-title']")
+            or card.select_one("a[href*='/stellenangebote--']")
+            or card.select_one("a[href*='/jobs--']")
+            or card.select_one("h2 a")
+            or card.select_one("a")
         )
 
         if not title_link or not title_link.get("href"):
@@ -327,47 +438,59 @@ class StepStone(Scraper):
 
         # Extract company name
         company_elem = (
-                card.select_one("[data-at='job-item-company-name']")
-                or card.select_one("[data-genesis-element='CARD_SUBTITLE']")
-                or card.select_one("span[class*='company']")
-                or card.select_one("div[class*='company']")
+            card.select_one("[data-at='job-item-company-name']")
+            or card.select_one("[data-genesis-element='CARD_SUBTITLE']")
+            or card.select_one("span[class*='company']")
+            or card.select_one("div[class*='company']")
         )
         company_name = company_elem.get_text(strip=True) if company_elem else "N/A"
 
         # Extract location
         loc_elem = (
-                card.select_one("[data-at='job-item-location']")
-                or card.select_one("[data-genesis-element='CARD_LOCATION']")
-                or card.select_one("span[class*='location']")
-                or card.select_one("div[class*='location']")
+            card.select_one("[data-at='job-item-location']")
+            or card.select_one("[data-genesis-element='CARD_LOCATION']")
+            or card.select_one("span[class*='location']")
+            or card.select_one("div[class*='location']")
         )
         loc_text = loc_elem.get_text(strip=True) if loc_elem else None
         location = parse_location(loc_text, Country.GERMANY)
 
         # Extract date
         time_elem = (
-                card.select_one("time")
-                or card.select_one("[data-at='job-item-time-ago']")
-                or card.select_one("span[class*='date']")
+            card.select_one("time")
+            or card.select_one("[data-at='job-item-time-ago']")
+            or card.select_one("span[class*='date']")
         )
         date_text = time_elem.get_text(strip=True) if time_elem else None
         date_posted = parse_relative_date(date_text)
 
         # Extract compensation if listed
-        salary_elem = card.select_one("[data-at='job-item-salary']") or card.select_one("span[class*='salary']")
+        salary_elem = card.select_one("[data-at='job-item-salary']") or card.select_one(
+            "span[class*='salary']"
+        )
         salary_text = salary_elem.get_text(strip=True) if salary_elem else None
         compensation = parse_compensation(salary_text)
 
         # Fetch detail description and metadata from the same page.
-        description, job_type, is_gone = self._fetch_job_details(job_url)
+        remote_metadata = RemoteMetadata()
+        if is_strict(self.scraper_input):
+            description, job_type, is_gone, remote_metadata = (
+                self._fetch_job_details_with_remote(job_url)
+            )
+        else:
+            description, job_type, is_gone = self._fetch_job_details(job_url)
         if is_gone:
-            log.info(f"Skipping unavailable StepStone job {job_url}: detail page returned 410")
+            log.info(
+                f"Skipping unavailable StepStone job {job_url}: detail page returned 410"
+            )
             return None
         emails = extract_emails_from_text(description) if description else None
 
         # Check remote
         card_text = card.get_text(separator=" ", strip=True)
-        is_remote = is_job_remote(title, loc_text or "", f"{card_text} {description or ''}")
+        is_remote = is_job_remote(
+            title, loc_text or "", f"{card_text} {description or ''}"
+        )
 
         return JobPost(
             id=job_id,
@@ -378,6 +501,7 @@ class StepStone(Scraper):
             date_posted=date_posted,
             compensation=compensation,
             is_remote=is_remote,
+            remote_metadata=remote_metadata,
             description=description,
             job_type=job_type,
             emails=emails,

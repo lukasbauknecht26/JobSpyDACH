@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse, unquote
 import regex as re
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from requests.adapters import HTTPAdapter
 
 from jobspy.exception import LinkedInException
 from jobspy.linkedin.constant import headers
@@ -18,7 +19,7 @@ from jobspy.linkedin.util import (
     job_type_code,
     parse_job_type,
     parse_job_level,
-    parse_company_industry
+    parse_company_industry,
 )
 from jobspy.model import (
     JobPost,
@@ -30,6 +31,13 @@ from jobspy.model import (
     Scraper,
     ScraperInput,
     Site,
+    RemoteMetadata,
+)
+from jobspy.remote import (
+    StrictRemoteSearch,
+    extract_job_posting,
+    is_strict,
+    metadata_from_job_posting,
 )
 from jobspy.util import (
     extract_emails_from_text,
@@ -51,7 +59,10 @@ class LinkedIn(Scraper):
     jobs_per_page = 25
 
     def __init__(
-        self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
+        self,
+        proxies: list[str] | str | None = None,
+        ca_cert: str | None = None,
+        user_agent: str | None = None,
     ):
         """
         Initializes LinkedInScraper with the LinkedIn job search url
@@ -67,6 +78,7 @@ class LinkedIn(Scraper):
         )
         self.session.headers.update(headers)
         self.scraper_input = None
+        self._strict = None
         self.country = "worldwide"
         self.job_url_direct_regex = re.compile(r'(?<=\?url=)[^"]+')
 
@@ -77,21 +89,41 @@ class LinkedIn(Scraper):
         :return: job_response
         """
         self.scraper_input = scraper_input
+        self._blocked = False
+        strict = (
+            StrictRemoteSearch(scraper_input, log) if is_strict(scraper_input) else None
+        )
+        self._strict = strict
+        target = strict.target if strict else scraper_input.results_wanted
         job_list: list[JobPost] = []
+
+        def finish():
+            return strict.finish(job_list) if strict else JobResponse(jobs=job_list)
+
         seen_ids = set()
-        start = scraper_input.offset // 10 * 10 if scraper_input.offset else 0
+        start = (
+            scraper_input.offset // 10 * 10
+            if scraper_input.offset and not strict
+            else 0
+        )
         request_count = 0
         seconds_old = (
             scraper_input.hours_old * 3600 if scraper_input.hours_old else None
         )
         continue_search = (
-            lambda: len(job_list) < scraper_input.results_wanted and start < 1000
+            lambda: len(job_list) < target
+            and start < 1000
+            and not self._blocked
+            and not (strict and strict.done)
         )
         while continue_search():
             request_count += 1
-            log.info(
-                f"search page: {request_count} / {math.ceil(scraper_input.results_wanted / 10)}"
-            )
+            if strict:
+                strict.log_progress(request_count)
+            else:
+                log.info(
+                    f"search page: {request_count} / {math.ceil(scraper_input.results_wanted / 10)}"
+                )
             distance_in_miles = (
                 max(1, int(round(scraper_input.distance / 1.609344)))
                 if scraper_input.distance is not None
@@ -99,12 +131,14 @@ class LinkedIn(Scraper):
             )
             params = {
                 "keywords": scraper_input.search_term,
-                "location": scraper_input.location,
+                "location": "Germany" if strict else scraper_input.location,
                 "distance": distance_in_miles,
                 "f_WT": 2 if scraper_input.is_remote else None,
-                "f_JT": job_type_code(scraper_input.job_type)
-                if scraper_input.job_type
-                else None,
+                "f_JT": (
+                    job_type_code(scraper_input.job_type)
+                    if scraper_input.job_type
+                    else None
+                ),
                 "pageNum": 0,
                 "start": start,
                 "f_AL": "true" if scraper_input.easy_apply else None,
@@ -119,7 +153,7 @@ class LinkedIn(Scraper):
 
             params = {k: v for k, v in params.items() if v is not None}
             try:
-                response = self.session.get(
+                response = self._get(
                     f"{self.base_url}/jobs-guest/jobs/api/seeMoreJobPostings/search?",
                     params=params,
                     timeout=10,
@@ -133,45 +167,81 @@ class LinkedIn(Scraper):
                         err = f"LinkedIn response status code {response.status_code}"
                         err += f" - {response.text}"
                     log.error(err)
-                    return JobResponse(jobs=job_list)
+                    return finish()
             except Exception as e:
                 if "Proxy responded with" in str(e):
                     log.error(f"LinkedIn: Bad proxy")
                 else:
                     log.error(f"LinkedIn: {str(e)}")
-                return JobResponse(jobs=job_list)
+                return finish()
 
             soup = BeautifulSoup(response.text, "html.parser")
             job_cards = soup.find_all("div", class_="base-search-card")
             if len(job_cards) == 0:
-                return JobResponse(jobs=job_list)
+                return finish()
 
+            initial_seen = len(seen_ids)
             for job_card in job_cards:
+                if strict and (strict.done or self._blocked):
+                    break
                 href_tag = job_card.find("a", class_="base-card__full-link")
                 if href_tag and "href" in href_tag.attrs:
                     href = href_tag.attrs["href"].split("?")[0]
-                    job_id = href.split("-")[-1]
+                    job_id = href.rstrip("/").rsplit("/", 1)[-1].rsplit("-", 1)[-1]
 
                     if job_id in seen_ids:
+                        continue
+                    if strict and not strict.visit(job_id):
                         continue
                     seen_ids.add(job_id)
 
                     try:
                         fetch_desc = scraper_input.linkedin_fetch_description
                         job_post = self._process_job(job_card, job_id, fetch_desc)
-                        if job_post:
+                        if strict.accept(job_post) if strict else job_post is not None:
                             job_list.append(job_post)
                         if not continue_search():
                             break
                     except Exception as e:
+                        if strict:
+                            strict.reject("malformed_job")
+                            log.warning("Skipping malformed LinkedIn job: %s", e)
+                            continue
                         raise LinkedInException(str(e))
 
+            if strict and len(seen_ids) == initial_seen:
+                log.info("LinkedIn repeated a result page; ending pagination")
+                break
             if continue_search():
-                time.sleep(random.uniform(self.delay, self.delay + self.band_delay))
+                delay = random.uniform(self.delay, self.delay + self.band_delay)
+                time.sleep(min(delay, strict.remaining_seconds) if strict else delay)
                 start += len(job_cards)
 
-        job_list = job_list[: scraper_input.results_wanted]
-        return JobResponse(jobs=job_list)
+        if strict:
+            return finish()
+        return JobResponse(jobs=job_list[: scraper_input.results_wanted])
+
+    def _get(self, url: str, *, timeout: float, **kwargs):
+        """Avoid hidden retries/backoff and cap request timeouts in strict mode.
+
+        The budget is cooperative: a response already being read can finish
+        after it expires. Completed jobs are retained; no new request is started.
+        """
+        strict = self._strict
+        if not strict:
+            return self.session.get(url, timeout=timeout, **kwargs)
+        remaining = strict.remaining_seconds
+        if remaining <= 0:
+            raise TimeoutError("Strict remote time budget reached")
+        adapter = self.session.get_adapter(url)
+        if not isinstance(adapter, HTTPAdapter):
+            return self.session.get(url, timeout=min(timeout, remaining), **kwargs)
+        retries = adapter.max_retries
+        try:
+            adapter.max_retries = 0
+            return self.session.get(url, timeout=min(timeout, remaining), **kwargs)
+        finally:
+            adapter.max_retries = retries
 
     def _process_job(
         self, job_card: Tag, job_id: str, full_descr: bool
@@ -236,11 +306,12 @@ class LinkedIn(Scraper):
             company_url=company_url,
             location=location,
             is_remote=is_remote,
+            remote_metadata=job_details.get("remote_metadata", RemoteMetadata()),
             date_posted=date_posted,
             job_url=f"{self.base_url}/jobs/view/{job_id}",
             compensation=compensation,
             job_type=job_details.get("job_type"),
-            job_level=job_details.get("job_level", "").lower(),
+            job_level=(job_details.get("job_level") or "").lower(),
             company_industry=job_details.get("company_industry"),
             description=job_details.get("description"),
             job_url_direct=job_details.get("job_url_direct"),
@@ -256,9 +327,9 @@ class LinkedIn(Scraper):
         :return: dict
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/jobs/view/{job_id}", timeout=5
-            )
+            response = self._get(f"{self.base_url}/jobs/view/{job_id}", timeout=5)
+            if is_strict(self.scraper_input) and response.status_code in {403, 429}:
+                self._blocked = True
             response.raise_for_status()
         except:
             return {}
@@ -266,13 +337,20 @@ class LinkedIn(Scraper):
             return {}
 
         soup = BeautifulSoup(response.text, "html.parser")
+        posting = (
+            extract_job_posting(soup, f"{self.base_url}/jobs/view/{job_id}")
+            if is_strict(self.scraper_input)
+            else {}
+        )
         div_content = soup.find(
             "div", class_=lambda x: x and "show-more-less-html__markup" in x
         )
         description = None
+        raw_description = None
         if div_content is not None:
             div_content = remove_attributes(div_content)
             description = div_content.prettify(formatter="html")
+            raw_description = description
             if self.scraper_input.description_format == DescriptionFormat.MARKDOWN:
                 description = markdown_converter(description)
             elif self.scraper_input.description_format == DescriptionFormat.PLAIN:
@@ -294,8 +372,13 @@ class LinkedIn(Scraper):
             if (logo_image := soup.find("img", {"class": "artdeco-entity-image"}))
             else None
         )
+        remote_metadata = metadata_from_job_posting(
+            posting, description_complete=bool(raw_description)
+        )
+        remote_metadata.description_text = raw_description
         return {
             "description": description,
+            "remote_metadata": remote_metadata,
             "job_level": parse_job_level(soup),
             "company_industry": parse_company_industry(soup),
             "job_type": parse_job_type(soup),

@@ -15,6 +15,7 @@ from jobspy.stepstone import StepStone
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
 from jobspy.location import normalize_location
+from jobspy.remote import STRICT_REMOTE_COLUMNS, STRICT_REMOTE_SITES
 from jobspy.util import (
     set_logger_level,
     extract_salary,
@@ -40,6 +41,7 @@ def _canonical_job_url(job_url: str | None) -> str | None:
 
 
 # Update the SCRAPER_MAPPING dictionary in the scrape_jobs function
+
 
 def scrape_jobs(
     site_name: str | list[str] | Site | list[Site] | None = None,
@@ -69,6 +71,9 @@ def scrape_jobs(
     ziprecruiter_browser_fallback: bool = False,
     ziprecruiter_browser_timeout: int = 180,
     ziprecruiter_browser_mode: Literal["system", "playwright"] = "system",
+    remote_mode: Literal["strict"] | None = None,
+    remote_max_candidates: int = 100,
+    remote_max_seconds: float = 120,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -115,13 +120,28 @@ def scrape_jobs(
     location_country = (
         country
         if isinstance(country, Country)
-        else Country.from_string(country)
-        if country is not None
-        else None
+        else Country.from_string(country) if country is not None else None
     )
 
+    sites = get_site_type()
+    if remote_mode == "strict":
+        if location_country != Country.GERMANY:
+            raise ValueError('remote_mode="strict" requires explicit country="germany"')
+        country_enum = location_country
+        unsupported = [site for site in sites if site not in STRICT_REMOTE_SITES]
+        sites = [site for site in sites if site in STRICT_REMOTE_SITES]
+        if not sites:
+            raise ValueError(
+                "Strict remote search supports xing, linkedin, stepstone, indeed and arbeitsagentur"
+            )
+        if unsupported:
+            create_logger("JobSpy").warning(
+                "Skipping sources without strict remote support: %s",
+                ", ".join(site.value for site in unsupported),
+            )
+
     scraper_input = ScraperInput(
-        site_type=get_site_type(),
+        site_type=sites,
         country=country_enum,
         location_country=location_country,
         search_term=search_term,
@@ -130,6 +150,9 @@ def scrape_jobs(
         location=location,
         distance=distance,
         is_remote=is_remote,
+        remote_mode=remote_mode,
+        remote_max_candidates=remote_max_candidates,
+        remote_max_seconds=remote_max_seconds,
         job_type=job_type,
         easy_apply=easy_apply,
         description_format=description_format,
@@ -143,11 +166,16 @@ def scrape_jobs(
         ziprecruiter_browser_timeout=ziprecruiter_browser_timeout,
         ziprecruiter_browser_mode=ziprecruiter_browser_mode,
     )
+    output_columns = desired_order + (
+        STRICT_REMOTE_COLUMNS if remote_mode == "strict" else []
+    )
+    if remote_mode == "strict" and results_wanted == 0:
+        return pd.DataFrame(columns=output_columns)
 
     def scrape_site(site: Site) -> Tuple[str, JobResponse]:
         scraper_class = SCRAPER_MAPPING[site]
         scraper = scraper_class(proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
-        scraped_data: JobResponse = scraper.scrape(scraper_input)
+        scraped_data: JobResponse = scraper.scrape(scraper_input.model_copy(deep=True))
         site_logger_name = SITE_LOGGER_NAMES.get(site, site.value.capitalize())
         create_logger(site_logger_name).info(f"finished scraping")
         return site.value, scraped_data
@@ -241,16 +269,18 @@ def scrape_jobs(
         jobs_df = pd.concat(filtered_dfs, ignore_index=True)
 
         # Step 3: Ensure all desired columns are present, adding missing ones as empty
-        for column in desired_order:
+        for column in output_columns:
             if column not in jobs_df.columns:
                 jobs_df[column] = None  # Add missing columns as empty
 
         # Reorder the DataFrame according to the desired order
-        jobs_df = jobs_df[desired_order]
+        jobs_df = jobs_df[output_columns]
 
         # Step 4: Sort the DataFrame as required
         jobs_df["_canonical_job_url"] = jobs_df["job_url"].map(_canonical_job_url)
-        jobs_df["_site_priority"] = (jobs_df["site"] != Site.STEPSTONE.value).astype(int)
+        jobs_df["_site_priority"] = (jobs_df["site"] != Site.STEPSTONE.value).astype(
+            int
+        )
         jobs_df = jobs_df.sort_values(by=["_site_priority"])
         jobs_df = jobs_df.drop_duplicates(subset=["_canonical_job_url"], keep="first")
         jobs_df = jobs_df.drop(columns=["_canonical_job_url", "_site_priority"])
@@ -259,7 +289,11 @@ def scrape_jobs(
             by=["site", "date_posted"], ascending=[True, False]
         ).reset_index(drop=True)
     else:
-        return pd.DataFrame()
+        return (
+            pd.DataFrame(columns=output_columns)
+            if remote_mode == "strict"
+            else pd.DataFrame()
+        )
 
 
 __all__ = [

@@ -15,7 +15,9 @@ from jobspy.model import (
     JobResponse,
     JobType,
     DescriptionFormat,
+    RemoteMetadata,
 )
+from jobspy.remote import StrictRemoteSearch, indeed_date_is_recent, is_strict
 from jobspy.util import (
     extract_emails_from_text,
     markdown_converter,
@@ -28,7 +30,10 @@ log = create_logger("Indeed")
 
 class Indeed(Scraper):
     def __init__(
-        self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
+        self,
+        proxies: list[str] | str | None = None,
+        ca_cert: str | None = None,
+        user_agent: str | None = None,
     ):
         """
         Initializes IndeedScraper with the Indeed API url
@@ -58,6 +63,12 @@ class Indeed(Scraper):
         self.base_url = f"https://{domain}.indeed.com"
         self.headers = api_headers.copy()
         self.headers["indeed-co"] = self.scraper_input.country.indeed_domain_value
+        self._strict = (
+            StrictRemoteSearch(scraper_input, log) if is_strict(scraper_input) else None
+        )
+        if self._strict:
+            self.seen_urls = set()
+            return self._scrape_strict()
         job_list = []
         page = 1
 
@@ -80,6 +91,28 @@ class Indeed(Scraper):
             ]
         )
 
+    def _scrape_strict(self) -> JobResponse:
+        jobs = []
+        cursor = None
+        cursors = set()
+        while not self._strict.done:
+            before = len(self._strict.seen)
+            try:
+                page_jobs, next_cursor = self._scrape_page(cursor)
+            except Exception as exc:
+                log.warning("Indeed strict remote search stopped: %s", exc)
+                break
+            jobs.extend(page_jobs)
+            if (
+                not next_cursor
+                or next_cursor in cursors
+                or len(self._strict.seen) == before
+            ):
+                break
+            cursors.add(next_cursor)
+            cursor = next_cursor
+        return self._strict.finish(jobs)
+
     def _scrape_page(self, cursor: str | None) -> Tuple[list[JobPost], str | None]:
         """
         Scrapes a page of Indeed for jobs with scraper_input criteria
@@ -94,11 +127,7 @@ class Indeed(Scraper):
             if self.scraper_input.indeed_search_term
             else self.scraper_input.search_term
         )
-        search_term = (
-            search_val.replace('"', '\\"')
-            if search_val
-            else ""
-        )
+        search_term = search_val.replace('"', '\\"') if search_val else ""
         location_clause = ""
         if self.scraper_input.location:
             radius_clause = (
@@ -106,7 +135,9 @@ class Indeed(Scraper):
                 if self.scraper_input.distance is not None
                 else ""
             )
-            location_clause = f'location: {{where: "{self.scraper_input.location}"{radius_clause}}}'
+            location_clause = (
+                f'location: {{where: "{self.scraper_input.location}"{radius_clause}}}'
+            )
 
         query = job_search_query.format(
             what=(f'what: "{search_term}"' if search_term else ""),
@@ -133,11 +164,48 @@ class Indeed(Scraper):
             )
             return jobs, new_cursor
         data = response.json()
+        if is_strict(self.scraper_input) and not (data.get("data") or {}).get(
+            "jobSearch"
+        ):
+            log.warning("Indeed returned no usable search data: %s", data.get("errors"))
+            return [], None
         jobs = data["data"]["jobSearch"]["results"]
         new_cursor = data["data"]["jobSearch"]["pageInfo"]["nextCursor"]
 
         job_list = []
         for job in jobs:
+            strict = getattr(self, "_strict", None)
+            if strict:
+                if strict.done:
+                    break
+                raw = job.get("job") if isinstance(job, dict) else None
+                if not isinstance(raw, dict) or not isinstance(raw.get("key"), str):
+                    strict.reject("malformed_job")
+                    continue
+                identifier = raw.get("key")
+                if not identifier or not strict.visit(identifier):
+                    continue
+                if not indeed_date_is_recent(
+                    raw.get("dateOnIndeed"), self.scraper_input.hours_old
+                ):
+                    strict.reject("age_filter")
+                    continue
+                try:
+                    processed_job = self._process_job(raw)
+                    if (
+                        processed_job
+                        and self.scraper_input.job_type
+                        and self.scraper_input.job_type
+                        not in (processed_job.job_type or [])
+                    ):
+                        strict.reject("job_type_filter")
+                        continue
+                    if strict.accept(processed_job):
+                        job_list.append(processed_job)
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    strict.reject("malformed_job")
+                    log.warning("Skipping malformed Indeed job: %s", exc)
+                continue
             processed_job = self._process_job(job["job"])
             if processed_job:
                 job_list.append(processed_job)
@@ -150,6 +218,28 @@ class Indeed(Scraper):
         IndeedApply: filters: { keyword: { field: "indeedApplyScope", keys: ["DESKTOP"] } }
         """
         filters_str = ""
+        if is_strict(self.scraper_input):
+            # Indeed accepts this filter on its own, but combining it with
+            # attributes currently fails in job-retrieval-service. All remote,
+            # age and job-type requirements are still enforced per job locally.
+            if self.scraper_input.easy_apply:
+                return (
+                    'filters: {keyword: {field: "indeedApplyScope", keys: ["DESKTOP"]}}'
+                )
+            # The API rejects date filters nested inside a composite. Keep remote
+            # server-side and enforce hours_old against dateOnIndeed locally.
+            keywords = ['{keyword: {field: "attributes", keys: ["DSQF7"]}}']
+            job_type_key = {
+                JobType.FULL_TIME: "CF3CP",
+                JobType.PART_TIME: "75GKK",
+                JobType.CONTRACT: "NJXCK",
+                JobType.INTERNSHIP: "VDTG7",
+            }.get(self.scraper_input.job_type)
+            if job_type_key:
+                keywords.append(
+                    '{keyword: {field: "attributes", keys: ["' + job_type_key + '"]}}'
+                )
+            return "filters: {composite: {filters: [" + ", ".join(keywords) + "]}}"
         if self.scraper_input.hours_old:
             filters_str = """
             filters: {{
@@ -158,9 +248,7 @@ class Indeed(Scraper):
                   start: "{start}h"
                 }}
             }}
-            """.format(
-                start=self.scraper_input.hours_old
-            )
+            """.format(start=self.scraper_input.hours_old)
         elif self.scraper_input.easy_apply:
             filters_str = """
             filters: {
@@ -213,7 +301,32 @@ class Indeed(Scraper):
         if job_url in self.seen_urls:
             return
         self.seen_urls.add(job_url)
-        description = job["description"]["html"]
+        description = (
+            (job.get("description") or {}).get("html") or ""
+            if is_strict(self.scraper_input)
+            else job["description"]["html"]
+        )
+        remote_metadata = RemoteMetadata()
+        if is_strict(self.scraper_input):
+            attributes = job.get("attributes") or []
+            full_remote = any(attr.get("key") == "DSQF7" for attr in attributes)
+            country = (job.get("location") or {}).get("countryCode")
+            remote_metadata = RemoteMetadata(
+                description_complete=bool(description),
+                description_text=description,
+                full_remote=full_remote,
+                hybrid=any(
+                    "hybrid" in attr.get("label", "").casefold() for attr in attributes
+                ),
+                onsite=any(
+                    attr.get("label", "").casefold()
+                    in {"on-site", "onsite", "in-person"}
+                    for attr in attributes
+                )
+                and not full_remote,
+                job_countries=[country] if isinstance(country, str) else [],
+                evidence=["Indeed attributes: DSQF7 (Remote)"] if full_remote else [],
+            )
         if self.scraper_input.description_format == DescriptionFormat.MARKDOWN:
             description = markdown_converter(description)
 
@@ -246,6 +359,7 @@ class Indeed(Scraper):
             ),
             emails=extract_emails_from_text(description) if description else None,
             is_remote=is_job_remote(job, description),
+            remote_metadata=remote_metadata,
             company_addresses=(
                 employer_details["addresses"][0]
                 if employer_details.get("addresses")

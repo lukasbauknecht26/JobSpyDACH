@@ -40,6 +40,100 @@ print(f"Found {len(jobs)} jobs")
 print(jobs.head())
 jobs.to_csv("jobs.csv", quoting=csv.QUOTE_NONNUMERIC, escapechar="\\", index=False) # to_excel
 ```
+### Strict remote search from Germany
+
+Use `remote_mode="strict"` to search without a city and keep jobs whose posting
+supports **95–100% remote work from Germany**:
+
+```python
+from jobspy import scrape_jobs
+
+jobs = scrape_jobs(
+    site_name=["xing", "linkedin", "stepstone", "indeed", "arbeitsagentur"],
+    search_term="Java Entwickler",
+    country="germany",
+    remote_mode="strict",
+    results_wanted=20,
+)
+print(jobs[["site", "title", "remote_min_percent", "remote_evidence", "job_url"]])
+```
+
+`country="germany"` is required explicitly (also accepts `Country.GERMANY`).
+It selects Germany for every supported source, including Indeed, regardless of
+the legacy `country_indeed` default. Omit `location`; `Germany`, `Deutschland`
+and `DE` are also accepted. A city raises `ValueError`; `distance` is ignored.
+Strict mode enables remote filtering and full LinkedIn descriptions automatically.
+
+The following native settings find **candidates**, which are then checked locally:
+
+| Source | Native search setting | Evidence checked for each job |
+| --- | --- | --- |
+| Xing | `remoteOption=FULL_REMOTE.050e26` | `FULL_REMOTE`, `TELECOMMUTE` or explicit full-remote text |
+| LinkedIn | `f_WT=2`, location `Germany` | Detail-page `TELECOMMUTE` or explicit full-remote text |
+| StepStone | `wp=611350` | Detail-page `TELECOMMUTE` or explicit full-remote text |
+| Indeed | Remote attribute `DSQF7`, country `DE` | The individual job's Remote classification or explicit full-remote text |
+| Arbeitsagentur | `homeoffice=prozentual_95` | Explicit minimum in the full description; the advertised percentage alone can be an upper bound |
+
+Native settings were checked on 2026-10-27 and may change. Indeed distinguishes
+[fully remote, hybrid and on-the-road postings](https://www.indeed.com/help/employers/articles/how-to-post-a-remote-job-on-indeed?co=US&hl=en).
+In strict mode, its remote and job-type filters are combined; `hours_old` is
+checked locally against `dateOnIndeed`, since the API rejects date filters
+inside the same composite filter. With `easy_apply=True`, Indeed's server-side
+Easy Apply filter is used on its own: combining it with attribute filters currently
+causes an API error. Remote evidence, job type and age are still required and
+checked locally, so this combination may need to examine more candidates.
+
+Every accepted job needs a full description and job-specific evidence. Search
+filter membership, an inferred display country and the old `is_remote` Boolean
+are insufficient. The conservative German/English rules reject recognized
+contradictions, conditional offers such as “up to 100%” or “nach Absprache”,
+hybrid arrangements without an explicit minimum of 95%, and unclear mandatory
+office attendance or travel. Separately stated office and travel percentages
+are added and must total at most 5%. Clearly time-bounded initial onboarding
+on site is allowed; the threshold applies to the regular working arrangement.
+
+Applicant restrictions take precedence over the office address. An explicit
+Germany/EU/EMEA/worldwide work area can qualify a job with a foreign employer;
+otherwise an actual German job country is required. Recognized regional
+residency restrictions and foreign-only work areas are excluded. The checks
+use the source description before HTML/Markdown/plain output conversion.
+
+Strict results add `remote_min_percent` and `remote_evidence` columns, including
+for empty results. The percentage is derived from the posting's claims, **not
+a confidence score or a guarantee of the employer's actual policy**. The rules
+favor precision over coverage and can miss valid jobs or unrecognized wording;
+keep the evidence when reviewing an offer.
+
+`results_wanted` and `offset` count accepted jobs per source, not downloaded
+advertisements or pages. Many candidates may fail verification. Rejected pages
+do not stop pagination, but each source now defaults to **100 unique candidates**
+(`remote_max_candidates`) and a **120-second search budget** (`remote_max_seconds`).
+Either limit ends that source's search and returns verified partial results,
+possibly fewer than `results_wanted`. The candidate limit can be set from 1 to
+1,000; the time budget must be positive and finite. These settings apply only
+to strict mode, independently for each source, including candidates skipped by
+`offset`. To explicitly allow a longer scan, for example:
+
+```python
+jobs = scrape_jobs(
+    search_term="Java Entwickler", country="germany", remote_mode="strict",
+    results_wanted=20, remote_max_candidates=300, remote_max_seconds=300,
+)
+```
+
+Time limits are checked between work steps; an in-flight request may finish
+after the budget expires. They are not a hard deadline for the entire call.
+LinkedIn also caps request timeouts to the remaining budget and disables HTTP
+retries/backoff during strict requests. Its progress logs show the current page,
+candidates checked, accepted jobs and elapsed time, rather than a guessed total
+page count. Sources also stop on exhausted/repeated results or blocking and log
+rejection counts. Google, Glassdoor and ZipRecruiter are
+skipped with a warning when mixed with supported sources; selecting only
+unsupported sources raises `ValueError` before making requests.
+
+Omitting `remote_mode` preserves the existing search behavior and output columns.
+`is_remote=True` continues to provide the broader remote/homeoffice search.
+
 ### DACH Location Normalization
 By default, all portals share an offline normalization step for the `location`
 column in Germany, Austria and Switzerland. For example, `Constance, BW, DE`
@@ -163,6 +257,16 @@ Optional
 |
 ├── is_remote (bool)
 │
+├── remote_mode ("strict" | None):
+|    verified 95–100% remote candidates from Germany; requires country="germany"
+|    and no city. Supported: xing, linkedin, stepstone, indeed, arbeitsagentur.
+│
+├── remote_max_candidates (int):
+|    strict-mode candidate limit per source, default 100, range 1–1000
+│
+├── remote_max_seconds (float):
+|    strict-mode search budget per source, default 120 seconds; in-flight requests may overrun
+│
 ├── results_wanted (int): 
 |    number of job results to retrieve for each site specified in 'site_name'
 │
@@ -199,6 +303,7 @@ Optional
 |
 ├── country (Country | str):
 |    optional country context for Google locations when the result omits its country
+|    required as "germany" for remote_mode="strict"; then selects all source countries
 |
 ├── enforce_annual_salary (bool): 
 |    converts wages to annual salary
@@ -209,7 +314,7 @@ Optional
 
 ```
 ├── Indeed limitations:
-|    Only one from this list can be used in a search:
+|    Without remote_mode="strict", only one from this list can be used in a search:
 |    - hours_old
 |    - job_type & is_remote
 |    - easy_apply
